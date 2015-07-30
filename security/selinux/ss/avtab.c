@@ -385,7 +385,6 @@ int avtab_read_item(struct avtab *a, void *fp, struct policydb *pol,
 	struct avtab_datum datum;
 	struct avtab_extended_perms xperms;
 	__le32 buf32[ARRAY_SIZE(xperms.perms.p)];
-	unsigned int android_m_compat_optype = 0;
 	int i, rc;
 	unsigned set;
 
@@ -476,13 +475,6 @@ int avtab_read_item(struct avtab *a, void *fp, struct policydb *pol,
 	key.target_class = le16_to_cpu(buf16[items++]);
 	key.specified = le16_to_cpu(buf16[items++]);
 
-	if ((key.specified & AVTAB_OPTYPE) &&
-			(vers == POLICYDB_VERSION_XPERMS_IOCTL)) {
-		key.specified = avtab_optype_to_xperms(key.specified);
-		android_m_compat_optype = 1;
-		avtab_android_m_compat_set();
-	}
-
 	if (!policydb_type_isvalid(pol, key.source_type) ||
 	    !policydb_type_isvalid(pol, key.target_type) ||
 	    !policydb_class_isvalid(pol, key.target_class)) {
@@ -513,22 +505,10 @@ int avtab_read_item(struct avtab *a, void *fp, struct policydb *pol,
 			printk(KERN_ERR "SELinux: avtab: truncated entry\n");
 			return rc;
 		}
-		if (avtab_android_m_compat ||
-			    ((xperms.specified != AVTAB_XPERMS_IOCTLFUNCTION) &&
-			    (xperms.specified != AVTAB_XPERMS_IOCTLDRIVER) &&
-			    (vers == POLICYDB_VERSION_XPERMS_IOCTL))) {
-			xperms.driver = xperms.specified;
-			if (android_m_compat_optype)
-				xperms.specified = AVTAB_XPERMS_IOCTLDRIVER;
-			else
-				xperms.specified = AVTAB_XPERMS_IOCTLFUNCTION;
-			avtab_android_m_compat_set();
-		} else {
-			rc = next_entry(&xperms.driver, fp, sizeof(u8));
-			if (rc) {
-				printk(KERN_ERR "SELinux: avtab: truncated entry\n");
-				return rc;
-			}
+		rc = next_entry(&xperms.driver, fp, sizeof(u8));
+		if (rc) {
+			printk(KERN_ERR "SELinux: avtab: truncated entry\n");
+			return rc;
 		}
 		rc = next_entry(buf32, fp, sizeof(u32)*ARRAY_SIZE(xperms.perms.p));
 		if (rc) {
@@ -614,22 +594,18 @@ int avtab_write_item(struct policydb *p, struct avtab_node *cur, void *fp)
 	buf16[0] = cpu_to_le16(cur->key.source_type);
 	buf16[1] = cpu_to_le16(cur->key.target_type);
 	buf16[2] = cpu_to_le16(cur->key.target_class);
-	if (avtab_android_m_compat && (cur->key.specified & AVTAB_XPERMS) &&
-		    (cur->datum.u.xperms->specified == AVTAB_XPERMS_IOCTLDRIVER))
-		buf16[3] = cpu_to_le16(avtab_xperms_to_optype(cur->key.specified));
-	else
-		buf16[3] = cpu_to_le16(cur->key.specified);
+	buf16[3] = cpu_to_le16(cur->key.specified);
 	rc = put_entry(buf16, sizeof(u16), 4, fp);
 	if (rc)
 		return rc;
 
 	if (cur->key.specified & AVTAB_XPERMS) {
-		if (avtab_android_m_compat == 0) {
-			rc = put_entry(&cur->datum.u.xperms->specified,
-					sizeof(u8), 1, fp);
-			if (rc)
-				return rc;
-		}
+		rc = put_entry(&cur->datum.u.xperms->specified, sizeof(u8), 1, fp);
+		if (rc)
+			return rc;
+		rc = put_entry(&cur->datum.u.xperms->driver, sizeof(u8), 1, fp);
+		if (rc)
+			return rc;
 		for (i = 0; i < ARRAY_SIZE(cur->datum.u.xperms->perms.p); i++)
 			buf32[i] = cpu_to_le32(cur->datum.u.xperms->perms.p[i]);
 		rc = put_entry(buf32, sizeof(u32),
