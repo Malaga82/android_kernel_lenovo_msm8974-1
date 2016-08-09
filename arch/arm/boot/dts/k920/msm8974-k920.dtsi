@@ -32,7 +32,7 @@
 	i2c@f9924000 {
 		/* synaptics s3408 touchscreen */
 		synaptics_s3408@38 {
-			compatible = "synaptics,s3408";
+			compatible = "synaptics,rmi4";
 			reg = <0x38>;
 			interrupt-parent = <&msmgpio>;
 			interrupts = <82 0x2>;
