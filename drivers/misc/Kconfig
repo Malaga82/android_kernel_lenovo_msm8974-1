@@ -671,6 +671,12 @@ config NXP_NFC
 	---help---
 	  The NXP NFC 547 chip is used as a NFC Controller.
 
+config NXP_TFA9890
+	depends on I2C
+	tristate "NXP TFA9890 Support"
+	---help---
+	  The NXP TFA9890 chip is used as a  smart PA Controller.
+
 config UID_CPUTIME
 	tristate "Per-UID cpu time statistics"
 	depends on PROFILING

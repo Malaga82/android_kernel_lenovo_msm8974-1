@@ -71,7 +71,7 @@
 #define SWCH_IRQ_DEBOUNCE_TIME_US 5000
 #define BTN_RELEASE_DEBOUNCE_TIME_MS 25
 
-#define GND_MIC_SWAP_THRESHOLD 2
+#define GND_MIC_SWAP_THRESHOLD 4
 #define OCP_ATTEMPT 1
 
 #define FW_READ_ATTEMPTS 15
@@ -123,7 +123,7 @@
 #define WCD9XXX_V_CS_HS_MAX 500
 #define WCD9XXX_V_CS_NO_MIC 5
 #define WCD9XXX_MB_MEAS_DELTA_MAX_MV 80
-#define WCD9XXX_CS_MEAS_DELTA_MAX_MV 12
+#define WCD9XXX_CS_MEAS_DELTA_MAX_MV 14
 
 static int impedance_detect_en;
 module_param(impedance_detect_en, int,
@@ -812,12 +812,15 @@ static void wcd9xxx_insert_detect_setup(struct wcd9xxx_mbhc *mbhc, bool ins)
 		 ins ? "insert" : "removal");
 	/* Disable detection to avoid glitch */
 	snd_soc_update_bits(mbhc->codec, WCD9XXX_A_MBHC_INSERT_DETECT, 1, 0);
+
+	/* Use outer pull-up. */
 	if (mbhc->mbhc_cfg->gpio_level_insert)
 		snd_soc_write(mbhc->codec, WCD9XXX_A_MBHC_INSERT_DETECT,
-			      (0x68 | (ins ? (1 << 1) : 0)));
+			      (0x18 | (ins ? (1 << 1) : 0)));
 	else
 		snd_soc_write(mbhc->codec, WCD9XXX_A_MBHC_INSERT_DETECT,
-			      (0x6C | (ins ? (1 << 1) : 0)));
+			      (0x1C | (ins ? (1 << 1) : 0)));
+				  
 	/* Re-enable detection */
 	snd_soc_update_bits(mbhc->codec, WCD9XXX_A_MBHC_INSERT_DETECT, 1, 1);
 }
@@ -892,6 +895,18 @@ static void wcd9xxx_report_plug(struct wcd9xxx_mbhc *mbhc, int insertion,
 						SND_JACK_ANC_HEADPHONE |
 						SND_JACK_UNSUPPORTED);
 		}
+
+#if 0
+        if (((mbhc->old_jack_type & SND_JACK_HEADPHONE) &&
+                !(mbhc->old_jack_type & SND_JACK_MICROPHONE)) &&
+                jack_type == SND_JACK_HEADSET) {
+		    mbhc->hph_status |= ~SND_JACK_HEADPHONE;
+		    wcd9xxx_jack_report(mbhc, &mbhc->headset_jack,
+                    mbhc->hph_status, WCD9XXX_JACK_MASK);
+            printk(KERN_DEBUG "%s: enter, Reporting HEADPHONE removal\n",
+                    __func__);
+        }
+#endif
 
 		/* Report insertion */
 		mbhc->hph_status |= jack_type;
@@ -1443,6 +1458,7 @@ wcd9xxx_cs_find_plug_type(struct wcd9xxx_mbhc *mbhc,
 			if (!minv || minv > d->_vdces)
 				minv = d->_vdces;
 		}
+#if 0   // avoid wrong detecting for lakala
 		if ((!d->mic_bias &&
 		    (d->_vdces >= WCD9XXX_CS_MEAS_INVALD_RANGE_LOW_MV &&
 		     d->_vdces <= WCD9XXX_CS_MEAS_INVALD_RANGE_HIGH_MV)) ||
@@ -1453,6 +1469,7 @@ wcd9xxx_cs_find_plug_type(struct wcd9xxx_mbhc *mbhc,
 			type = PLUG_TYPE_INVALID;
 			goto exit;
 		}
+#endif
 	}
 
 	delta_thr = ((highhph_cnt == sz) || highhph) ?
@@ -1528,15 +1545,6 @@ wcd9xxx_cs_find_plug_type(struct wcd9xxx_mbhc *mbhc,
 		pr_debug("%s: Invalid, inconsistent HPHL..\n", __func__);
 		type = PLUG_TYPE_INVALID;
 		goto exit;
-	}
-
-	if (!(event_state & (1UL << MBHC_EVENT_PA_HPHL))) {
-		if (((type == PLUG_TYPE_HEADSET ||
-		      type == PLUG_TYPE_HEADPHONE) && ch != sz)) {
-			pr_debug("%s: Invalid, not fully inserted, TYPE %d\n",
-				 __func__, type);
-			type = PLUG_TYPE_INVALID;
-		}
 	}
 
 	if (type == PLUG_TYPE_HEADSET &&
@@ -3090,6 +3098,23 @@ static void wcd9xxx_correct_swch_plug(struct work_struct *work)
 			}
 		} else if (plug_type == PLUG_TYPE_HEADPHONE) {
 			pr_debug("Good headphone detected, continue polling\n");
+
+			/* For workground */
+			pt_gnd_mic_swap_cnt++;
+			if (mbhc->mbhc_cfg->swap_gnd_mic) {
+				/*
+				* if switch is toggled, check again,
+				* otherwise report unsupported plug
+				*/
+				if (pt_gnd_mic_swap_cnt < 3) {
+					printk(KERN_DEBUG "Try to swap GND MIC\n");
+					mbhc->mbhc_cfg->swap_gnd_mic(codec);
+					continue;
+				}
+				printk(KERN_DEBUG "%s: pt_gnd_mic_swap_cnt=%d\n",
+					__func__, pt_gnd_mic_swap_cnt);
+			}
+
 			WCD9XXX_BCL_LOCK(mbhc->resmgr);
 			if (mbhc->mbhc_cfg->detect_extn_cable) {
 				if (mbhc->current_plug != plug_type)
@@ -3245,7 +3270,6 @@ static void wcd9xxx_swch_irq_handler(struct wcd9xxx_mbhc *mbhc)
 			wcd9xxx_report_plug(mbhc, 0, SND_JACK_HEADPHONE);
 			is_removed = true;
 		} else if (mbhc->current_plug == PLUG_TYPE_GND_MIC_SWAP) {
-			wcd9xxx_report_plug(mbhc, 0, SND_JACK_UNSUPPORTED);
 			is_removed = true;
 		} else if (mbhc->current_plug == PLUG_TYPE_HEADSET) {
 			wcd9xxx_pause_hs_polling(mbhc);
@@ -3393,27 +3417,24 @@ static int wcd9xxx_determine_button(const struct wcd9xxx_mbhc *mbhc,
 static int wcd9xxx_get_button_mask(const int btn)
 {
 	int mask = 0;
+
 	switch (btn) {
 	case 0:
+	case 1:
 		mask = SND_JACK_BTN_0;
 		break;
-	case 1:
-		mask = SND_JACK_BTN_1;
-		break;
 	case 2:
-		mask = SND_JACK_BTN_2;
+		mask = SND_JACK_BTN_5;
 		break;
 	case 3:
-		mask = SND_JACK_BTN_3;
+		mask = SND_JACK_BTN_0;
 		break;
 	case 4:
 		mask = SND_JACK_BTN_4;
 		break;
 	case 5:
-		mask = SND_JACK_BTN_5;
-		break;
 	case 6:
-		mask = SND_JACK_BTN_6;
+		mask = SND_JACK_BTN_5;
 		break;
 	case 7:
 		mask = SND_JACK_BTN_7;
@@ -4992,6 +5013,23 @@ int wcd9xxx_mbhc_init(struct wcd9xxx_mbhc *mbhc, struct wcd9xxx_resmgr *resmgr,
 		ret = snd_jack_set_key(mbhc->button_jack.jack,
 				       SND_JACK_BTN_0,
 				       KEY_MEDIA);
+		if (ret) {
+			pr_err("%s: Failed to set code for btn-0\n",
+				__func__);
+			return ret;
+		}
+
+		ret = snd_jack_set_key(mbhc->button_jack.jack,
+					   SND_JACK_BTN_5,
+					   KEY_VOLUMEUP);
+		if (ret) {
+			pr_err("%s: Failed to set code for btn-5\n",
+				__func__);
+			return ret;
+		}
+		ret = snd_jack_set_key(mbhc->button_jack.jack,
+				       SND_JACK_BTN_7,
+				       KEY_VOLUMEDOWN);
 		if (ret) {
 			pr_err("%s: Failed to set code for btn-0\n",
 				__func__);
