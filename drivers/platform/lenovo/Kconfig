@@ -1,0 +1,6 @@
+# Lenovo configuration options
+
+config MACH_LENOVO_K920
+	bool "k920 board"
+	help
+		Support for Lenovo K920
