@@ -412,13 +412,15 @@ struct flash_config_data {
 	u8	strobe_type;
 	u8	peripheral_subtype;
 	u16	current_addr;
-	u16	second_addr;
+	//u16	second_addr;
 	bool	safety_timer;
 	bool	torch_enable;
 	bool	flash_reg_get;
+	bool	torch_reg_get;
 	bool    flash_wa_reg_get;
 	bool	flash_on;
 	bool	torch_on;
+	bool	torch_mode_enable;
 	struct regulator *flash_boost_reg;
 	struct regulator *torch_boost_reg;
 	struct regulator *flash_wa_reg;
@@ -930,47 +932,111 @@ regulator_turn_off:
 
 static int qpnp_torch_regulator_operate(struct qpnp_led_data *led, bool on)
 {
-	int rc;
+	int rc, i;
+	struct qpnp_led_data *led_array;
+	bool regulator_on = false;
+
+	led_array = dev_get_drvdata(&led->spmi_dev->dev);
+	if (!led_array) {
+		dev_err(&led->spmi_dev->dev,
+				"Unable to get LED array\n");
+		return -EINVAL;
+	}
+
+	for (i = 0; i < led->num_leds; i++)
+		regulator_on |= led_array[i].flash_cfg->torch_on;
 
 	if (!on)
 		goto regulator_turn_off;
 
-	if (!led->flash_cfg->torch_on) {
-		rc = regulator_enable(led->flash_cfg->torch_boost_reg);
-		if (rc) {
-			dev_err(&led->spmi_dev->dev,
-				"Regulator enable failed(%d)\n", rc);
-				return rc;
+	if (!regulator_on && !led->flash_cfg->torch_on) {
+		for (i = 0; i < led->num_leds; i++) {
+			if (led_array[i].flash_cfg->torch_reg_get) {
+
+				rc = regulator_enable(
+					led_array[i].flash_cfg->\
+					torch_boost_reg);
+				if (rc) {
+					dev_err(&led->spmi_dev->dev,
+					"Regulator enable failed(%d)\n", rc);
+					return rc;
+				}
+				led->flash_cfg->torch_on = true;
+			}
+			break;
 		}
-		led->flash_cfg->torch_on = true;
 	}
+
 	return 0;
 
 regulator_turn_off:
-	if (led->flash_cfg->torch_on) {
-		rc = qpnp_led_masked_write(led,	FLASH_ENABLE_CONTROL(led->base),
+	if (regulator_on && led->flash_cfg->torch_on) {
+		for (i = 0; i < led->num_leds; i++) {
+			if (led_array[i].flash_cfg->torch_reg_get) {
+				rc = qpnp_led_masked_write(led,	FLASH_ENABLE_CONTROL(led->base),
 				FLASH_ENABLE_MODULE_MASK, FLASH_DISABLE_ALL);
-		if (rc) {
-			dev_err(&led->spmi_dev->dev,
-				"Enable reg write failed(%d)\n", rc);
-		}
+				if (rc) {
+					dev_err(&led->spmi_dev->dev,
+						"Enable reg write failed(%d)\n",
+						rc);
+				}
 
-		rc = regulator_disable(led->flash_cfg->torch_boost_reg);
-		if (rc) {
-			dev_err(&led->spmi_dev->dev,
-				"Regulator disable failed(%d)\n", rc);
-			return rc;
+				rc = regulator_disable(led_array[i].flash_cfg->\
+							torch_boost_reg);
+				if (rc) {
+					dev_err(&led->spmi_dev->dev,
+						"Flash boost regulator disable"
+						"failed(%d)\n", rc);
+					return rc;
+				}
+				led->flash_cfg->torch_on = false;
+			}
+			break;
 		}
-		led->flash_cfg->torch_on = false;
+	}
+
+	return 0;
+}
+static int qpnp_torch_mode_enable_operate(struct qpnp_led_data *led, bool on)
+{
+	int rc, i;
+	struct qpnp_led_data *led_array;
+	bool torch_mode_enable = false;
+
+	led_array = dev_get_drvdata(&led->spmi_dev->dev);
+	if (!led_array) {
+		dev_err(&led->spmi_dev->dev,
+				"Unable to get LED array\n");
+		return -EINVAL;
+	}
+	for (i = 0; i < led->num_leds; i++)
+	torch_mode_enable |= led_array[i].flash_cfg->torch_mode_enable;
+	if(on){
+		if (!torch_mode_enable && !led->flash_cfg->torch_mode_enable) {
+			rc = qpnp_led_masked_write(led,
+				FLASH_LED_TORCH(led->base),
+				FLASH_TORCH_MASK, FLASH_LED_TORCH_ENABLE);
+			if(rc == 0)
+				led->flash_cfg->torch_mode_enable = true;
+		}
+		return rc;
+	} else {
+		if (torch_mode_enable && led->flash_cfg->torch_mode_enable) {
+			rc = qpnp_led_masked_write(led,
+				FLASH_LED_TORCH(led->base),
+				FLASH_TORCH_MASK, FLASH_LED_TORCH_DISABLE);
+			if(rc == 0)
+				led->flash_cfg->torch_mode_enable = false;
+		}
 	}
 	return 0;
 }
-
 static int qpnp_flash_set(struct qpnp_led_data *led)
 {
 	int rc, error;
 	int val = led->cdev.brightness;
-
+			//dev_err(&led->spmi_dev->dev,
+				//"qpnp_flash_set torch_enable:%d, val:%d\n",led->flash_cfg->torch_enable, val);
 	if (led->flash_cfg->torch_enable)
 		led->flash_cfg->current_prgm =
 			(val * TORCH_MAX_LEVEL / led->max_current);
@@ -1009,10 +1075,7 @@ static int qpnp_flash_set(struct qpnp_led_data *led)
 					"Secure reg write failed(%d)\n", rc);
 				goto error_reg_write;
 			}
-
-			rc = qpnp_led_masked_write(led,
-				FLASH_LED_TORCH(led->base),
-				FLASH_TORCH_MASK, FLASH_LED_TORCH_ENABLE);
+			rc = qpnp_torch_mode_enable_operate(led,true);
 			if (rc) {
 				dev_err(&led->spmi_dev->dev,
 					"Torch reg write failed(%d)\n", rc);
@@ -1028,7 +1091,7 @@ static int qpnp_flash_set(struct qpnp_led_data *led)
 					"Current reg write failed(%d)\n", rc);
 				goto error_reg_write;
 			}
-
+#if 0
 			rc = qpnp_led_masked_write(led,
 				led->flash_cfg->second_addr,
 				FLASH_CURRENT_MASK,
@@ -1039,7 +1102,7 @@ static int qpnp_flash_set(struct qpnp_led_data *led)
 					rc);
 				goto error_reg_write;
 			}
-
+#endif
 			qpnp_led_masked_write(led, FLASH_MAX_CURR(led->base),
 				FLASH_CURRENT_MASK,
 				TORCH_MAX_LEVEL);
@@ -1189,10 +1252,7 @@ static int qpnp_flash_set(struct qpnp_led_data *led)
 				goto error_torch_set;
 			}
 
-			rc = qpnp_led_masked_write(led,
-					FLASH_LED_TORCH(led->base),
-					FLASH_TORCH_MASK,
-					FLASH_LED_TORCH_DISABLE);
+			rc = qpnp_torch_mode_enable_operate(led,false);
 			if (rc) {
 				dev_err(&led->spmi_dev->dev,
 					"Torch reg write failed(%d)\n", rc);
@@ -2925,11 +2985,12 @@ static int __devinit qpnp_get_config_flash(struct qpnp_led_data *led,
 			*reg_set = true;
 		} else
 			led->flash_cfg->flash_reg_get = false;
-
+#if 0
 		if (led->flash_cfg->torch_enable) {
 			led->flash_cfg->second_addr =
 						FLASH_LED_1_CURR(led->base);
 		}
+#endif
 	} else if (led->id == QPNP_ID_FLASH1_LED1) {
 		led->flash_cfg->enable_module = FLASH_ENABLE_LED_1;
 		led->flash_cfg->current_addr = FLASH_LED_1_CURR(led->base);
@@ -2948,32 +3009,44 @@ static int __devinit qpnp_get_config_flash(struct qpnp_led_data *led,
 			*reg_set = true;
 		} else
 			led->flash_cfg->flash_reg_get = false;
-
+#if 0
 		if (led->flash_cfg->torch_enable) {
 			led->flash_cfg->second_addr =
 						FLASH_LED_0_CURR(led->base);
 		}
+#endif
 	} else {
 		dev_err(&led->spmi_dev->dev, "Unknown flash LED name given\n");
 		return -EINVAL;
 	}
 
+//dev_err(&led->spmi_dev->dev,
+					//"qpnp_get_config_flash M led->id:%d ,*reg_se:%d, flash_reg_get:%d\n",
+					//led->id,*reg_set,led->flash_cfg->flash_reg_get);
 	if (led->flash_cfg->torch_enable) {
+		if (led->id == QPNP_ID_FLASH1_LED0) {
+			*reg_set = false;
+		}
 		if (of_find_property(of_get_parent(node), "torch-boost-supply",
 									NULL)) {
-			led->flash_cfg->torch_boost_reg =
-				regulator_get(&led->spmi_dev->dev,
-								"torch-boost");
-			if (IS_ERR(led->flash_cfg->torch_boost_reg)) {
-				rc = PTR_ERR(led->flash_cfg->torch_boost_reg);
-				dev_err(&led->spmi_dev->dev,
-					"Torch regulator get failed(%d)\n", rc);
-				goto error_get_torch_reg;
-			}
+			if(!*reg_set) {
+				led->flash_cfg->torch_boost_reg =
+					regulator_get(&led->spmi_dev->dev,
+									"torch-boost");
+				if (IS_ERR(led->flash_cfg->torch_boost_reg)) {
+					rc = PTR_ERR(led->flash_cfg->torch_boost_reg);
+					dev_err(&led->spmi_dev->dev,
+						"Torch regulator get failed(%d)\n", rc);
+					goto error_get_torch_reg;
+				}
+				led->flash_cfg->torch_reg_get = true;
+				*reg_set = true;
+			} else
+				led->flash_cfg->torch_reg_get = false;
 			led->flash_cfg->enable_module = FLASH_ENABLE_MODULE;
 		} else
 			led->flash_cfg->enable_module = FLASH_ENABLE_ALL;
-		led->flash_cfg->trigger_flash = FLASH_TORCH_OUTPUT;
+		//led->flash_cfg->trigger_flash = FLASH_TORCH_OUTPUT;
 	}
 
 	rc = of_property_read_u32(node, "qcom,current", &val);
@@ -3700,8 +3773,9 @@ static int __devexit qpnp_leds_remove(struct spmi_device *spmi)
 				regulator_put(led_array[i].flash_cfg-> \
 							flash_boost_reg);
 			if (led_array[i].flash_cfg->torch_enable)
-				regulator_put(led_array[i].flash_cfg->\
-							torch_boost_reg);
+				if (led_array[i].flash_cfg->torch_reg_get)
+					regulator_put(led_array[i].flash_cfg->\
+								torch_boost_reg);
 			sysfs_remove_group(&led_array[i].cdev.dev->kobj,
 							&led_attr_group);
 			break;
@@ -3764,7 +3838,7 @@ static int __devexit qpnp_leds_remove(struct spmi_device *spmi)
 
 #ifdef CONFIG_OF
 static struct of_device_id spmi_match_table[] = {
-	{ .compatible = "qcom,leds-qpnp",},
+	{.compatible = "qcom,leds-qpnp",},
 	{ },
 };
 #else
@@ -3772,12 +3846,12 @@ static struct of_device_id spmi_match_table[] = {
 #endif
 
 static struct spmi_driver qpnp_leds_driver = {
-	.driver		= {
-		.name	= "qcom,leds-qpnp",
-		.of_match_table = spmi_match_table,
-	},
-	.probe		= qpnp_leds_probe,
-	.remove		= __devexit_p(qpnp_leds_remove),
+		.driver		= {
+			.name	= "qcom,leds-qpnp",
+			.of_match_table = spmi_match_table,
+		},
+		.probe		= qpnp_leds_probe,
+		.remove		= __devexit_p(qpnp_leds_remove),
 };
 
 static int __init qpnp_led_init(void)
