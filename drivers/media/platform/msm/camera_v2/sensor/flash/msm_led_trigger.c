@@ -14,11 +14,12 @@
 #define pr_fmt(fmt) "%s:%d " fmt, __func__, __LINE__
 
 #include <linux/module.h>
+#include <linux/proc_fs.h>
 #include "msm_led_flash.h"
 
 #define FLASH_NAME "camera-led-flash"
 
-/*#define CONFIG_MSMB_CAMERA_DEBUG*/
+#define CONFIG_MSMB_CAMERA_DEBUG
 #undef CDBG
 #ifdef CONFIG_MSMB_CAMERA_DEBUG
 #define CDBG(fmt, args...) pr_err(fmt, ##args)
@@ -44,6 +45,31 @@ static int32_t msm_led_trigger_get_subdev_id(struct msm_led_flash_ctrl_t *fctrl,
 	CDBG("%s:%d subdev_id %d\n", __func__, __LINE__, *subdev_id);
 	return 0;
 }
+ssize_t proc_flash_led_write (struct file *file, const char __user *buf, size_t nbytes, loff_t *ppos)
+{
+    char string[nbytes];
+
+	uint32_t i = 0;
+    sscanf(buf, "%s", string);
+    if (!strcmp((const char *)string, (const char *)"on"))
+    {
+    		CDBG("MSM_CAMERA_LED_LOW called\n");
+		if (fctrl.torch_trigger)
+			led_trigger_event(fctrl.torch_trigger,
+				fctrl.torch_op_current);
+    }
+    else if (!strcmp((const char *)string, (const char *)"off"))
+    {
+        		CDBG("MSM_CAMERA_LED_LOW called\n");
+		for (i = 0; i < fctrl.num_sources; i++)
+			if (fctrl.flash_trigger[i])
+				led_trigger_event(fctrl.flash_trigger[i], 0);
+		if (fctrl.torch_trigger)
+			led_trigger_event(fctrl.torch_trigger, 0);
+    }
+    return nbytes;
+}
+EXPORT_SYMBOL(proc_flash_led_write);
 
 static int32_t msm_led_trigger_config(struct msm_led_flash_ctrl_t *fctrl,
 	void *data)
@@ -135,6 +161,10 @@ static struct platform_driver msm_led_trigger_driver = {
 	},
 };
 
+const struct file_operations proc_flash_led_operations = {
+	.owner	= THIS_MODULE,
+	.write	= proc_flash_led_write,
+};
 static int32_t msm_led_trigger_probe(struct platform_device *pdev)
 {
 	int32_t rc = 0, rc_1 = 0, i = 0;
@@ -142,9 +172,14 @@ static int32_t msm_led_trigger_probe(struct platform_device *pdev)
 	struct device_node *flash_src_node = NULL;
 	uint32_t count = 0;
 	struct led_trigger *temp = NULL;
-
+  struct proc_dir_entry * rcdir;
 	CDBG("called\n");
+	rcdir = proc_create_data("CTP_FLASH_CTRL", S_IFREG | S_IWUGO | S_IWUSR, NULL, &proc_flash_led_operations, NULL);
+    if(rcdir==NULL)
+    {
+    	CDBG("proc_create_data fail\n");
 
+    }
 	if (!of_node) {
 		pr_err("of_node NULL\n");
 		return -EINVAL;
