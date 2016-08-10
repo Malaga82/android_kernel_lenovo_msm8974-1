@@ -1,5 +1,5 @@
 /*
- * Synaptics DSX touchscreen driver
+ * Synaptics TFA9890 audio amplifier driver
  *
  * Copyright (C) 2012 Synaptics Incorporated
  *
@@ -729,5 +729,5 @@ module_init(nxp_tfa9890_init);
 module_exit(nxp_tfa9890_exit);
 
 MODULE_AUTHOR("NXP, Inc.");
-MODULE_DESCRIPTION("NXP TFA9885 I2C Touch Driver");
+MODULE_DESCRIPTION("NXP TFA9890 I2C Audio Amplifier Driver");
 MODULE_LICENSE("GPL v2");
