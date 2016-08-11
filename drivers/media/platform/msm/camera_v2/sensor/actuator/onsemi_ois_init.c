@@ -1606,7 +1606,7 @@ int	IniSet( void )
 	if( IniDgy() != OIS_FW_POLLING_PASS ) return OIS_FW_POLLING_FAIL ;
 	// Adjust Fix Value Setting
 	IniAdj() ;
-    pr_err("ois IniSet over +\n");
+	//pr_err("ois IniSet over +\n");
 #endif
 	//RamAccFixMod( ON ) ;
 
@@ -3182,7 +3182,7 @@ void	OisEna( void )
 	//SrvCon( Y_DIR, ON ) ;
 	
 	GyrCon( ON ) ;
-	pr_err("oisEna \n");
+	//pr_err("oisEna \n");
 }
 
 
@@ -3197,7 +3197,7 @@ void	OisEna( void )
 void	OisOff( void ) //Ois Off
 {
  	GyrCon( OFF ) ;
-	pr_err("OisOff \n");
+	//pr_err("OisOff \n");
   	return;
 }
 

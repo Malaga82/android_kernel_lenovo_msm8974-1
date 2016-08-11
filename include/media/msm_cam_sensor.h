@@ -52,6 +52,8 @@
 #define MAX_NUMBER_OF_STEPS 47
 #define MAX_POWER_CONFIG 12
 
+#define MAX_LED_TRIGGERS 2
+
 enum flash_type {
 	LED_FLASH = 1,
 	STROBE_FLASH,
@@ -439,7 +441,6 @@ enum eeprom_cfg_type_t {
 struct eeprom_get_t {
 	uint32_t num_bytes;
 	uint8_t is_3a_checksumed;
-	uint8_t is_ois_checksumed;
 };
 
 struct eeprom_read_t {
@@ -507,7 +508,7 @@ enum msm_actuator_cfg_type_t {
 	CFG_SET_DEFAULT_FOCUS,
 	CFG_SET_POSITION,
 	CFG_MOVE_FOCUS,
-	CFG_SET_OISMODE,
+	CFG_SET_OIS_MODE,
 	CFG_SET_OIS_ENABLE,
 };
 
@@ -638,7 +639,7 @@ struct msm_actuator_cfg_data {
 		struct msm_actuator_get_info_t get_info;
 		struct msm_actuator_set_position_t setpos;
 		enum af_camera_name cam_name;
-		int cammode; // for otp checksum
+		int cam_mode;
 		uint8_t ois_enable; // for enable/disable OIS
 	} cfg;
 };
@@ -667,7 +668,7 @@ enum msm_camera_led_config_t {
 struct msm_camera_led_cfg_t {
 	enum msm_camera_led_config_t cfgtype;
 	uint32_t torch_current;
-	uint32_t flash_current[2];
+	uint32_t flash_current[MAX_LED_TRIGGERS];
 };
 
 /* sensor init structures and enums */
