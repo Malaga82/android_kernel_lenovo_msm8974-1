@@ -264,6 +264,9 @@ struct synaptics_rmi4_data {
 	struct early_suspend early_suspend;
 #endif
 #endif
+	struct class *tp_class;
+	int index;
+	struct device *dev;
 };
 
 enum exp_fn {

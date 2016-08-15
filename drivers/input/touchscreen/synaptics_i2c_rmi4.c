@@ -36,6 +36,9 @@
 #define INPUT_PHYS_NAME "synaptics_rmi4_i2c/input0"
 #define DEBUGFS_DIR_NAME "ts_debug"
 
+#define TP_CLASS "touch"
+#define TP_DEVICE "tp_dev"
+
 #define RESET_DELAY 100
 
 #define TYPE_B_PROTOCOL
@@ -100,6 +103,8 @@ enum device_status {
 #define MAX_F11_TOUCH_WIDTH 15
 
 #define RMI4_COORDS_ARR_SIZE 4
+
+static atomic_t device_count;
 
 static int synaptics_rmi4_i2c_read(struct synaptics_rmi4_data *rmi4_data,
 		unsigned short addr, unsigned char *data,
@@ -3131,6 +3136,35 @@ static int __devinit synaptics_rmi4_probe(struct i2c_client *client,
 		return retval;
 	}
 
+	/* Create tp class */
+	rmi4_data->tp_class = class_create(THIS_MODULE, TP_CLASS);
+	if (IS_ERR(rmi4_data->tp_class)) {
+		dev_err(&client->dev,
+			"%s: Failed to create tp class\n", __func__);
+		return retval;
+	}
+
+	/* Create device */
+	atomic_set(&device_count, 0);
+	rmi4_data->index = atomic_inc_return(&device_count);
+	rmi4_data->dev = device_create(rmi4_data->tp_class, NULL,
+				MKDEV(0, rmi4_data->index), NULL, TP_DEVICE);
+	if (IS_ERR(rmi4_data->dev)) {
+		dev_err(&client->dev,
+			"%s: Failed to create device\n", __func__);
+		return retval;
+	}
+	for (attr_count = 0; attr_count < ARRAY_SIZE(attrs); attr_count++) {
+		retval = sysfs_create_file(&rmi4_data->dev->kobj,
+				&attrs[attr_count].attr);
+		if (retval < 0) {
+			dev_err(&client->dev,
+				"%s: Failed to create sysfs attributes\n", __func__);
+			return retval;
+		}
+	}
+	dev_set_drvdata(rmi4_data->dev, rmi4_data);
+
 	return retval;
 
 err_sysfs:
@@ -3215,6 +3249,17 @@ static int __devexit synaptics_rmi4_remove(struct i2c_client *client)
 		sysfs_remove_file(&rmi4_data->input_dev->dev.kobj,
 				&attrs[attr_count].attr);
 	}
+
+	if (!rmi4_data->dev && !rmi4_data->tp_class) {
+		for (attr_count = 0; attr_count < ARRAY_SIZE(attrs); attr_count++)
+			sysfs_remove_file(&rmi4_data->dev->kobj,
+				&attrs[attr_count].attr);
+	}
+	dev_set_drvdata(rmi4_data->dev, NULL);
+	device_destroy(rmi4_data->tp_class, MKDEV(0, rmi4_data->index));
+
+	if (!rmi4_data->tp_class)
+		class_destroy(rmi4_data->tp_class);
 
 	input_unregister_device(rmi4_data->input_dev);
 
