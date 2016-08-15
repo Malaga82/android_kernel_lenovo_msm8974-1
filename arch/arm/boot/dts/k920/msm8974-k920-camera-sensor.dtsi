@@ -30,7 +30,7 @@
 		qcom,cci-master = <0>;
 	};
 
-eeprom0: qcom,eeprom@a0 {
+	eeprom0: qcom,eeprom@a0 {
 		cell-index = <0>;
 		reg = <0xa0 0x0>;
 		qcom,eeprom-name = "onsemi";
@@ -57,8 +57,8 @@ eeprom0: qcom,eeprom@a0 {
 		qcom,cam-vreg-op-mode = <105000 0 80000 >;
 		qcom,gpio-no-mux = <0>;
 
-        gpios = <&msmgpio 54 0>; //RCAM_PON
-		qcom,gpio-vdig =<0>;
+		gpios = <&msmgpio 54 0>; //RCAM_PON
+		qcom,gpio-vdig = <0>;
 		qcom,gpio-req-tbl-num = <0>;
 		qcom,gpio-req-tbl-flags = <0>;
 		qcom,gpio-req-tbl-label = "CAM_VDIG";
@@ -72,7 +72,7 @@ eeprom0: qcom,eeprom@a0 {
 
 	};
 
- qcom,camera@20 {
+	qcom,camera@20 {
 		compatible = "qcom,s5k2p8";
 		reg = <0x20>;
 		qcom,slave-id = <0x20 0x40000000 0x2108>;
@@ -121,56 +121,6 @@ eeprom0: qcom,eeprom@a0 {
 		status = "ok";
 	};
 
-/*
- qcom,camera@20 {
-		compatible = "qcom,imx214";
-		reg = <0x20>;
-		qcom,slave-id = <0x20 0x0016 0x0214>;
-		qcom,csiphy-sd-index = <0>;
-		qcom,csid-sd-index = <0>;
-		qcom,mount-angle = <90>;
-		qcom,sensor-name = "imx214";
-		qcom,led-flash-src = <&led_flash0>;
-		//qcom,actuator-src = <&actuator7>;
-		//qcom,eeprom-src = <&eeprom0>;
-		cam_vdig-supply = <&pm8941_l1>;  //1.2
-		cam_vana-supply = <&pm8941_l17>; //2.85
-		cam_vio-supply = <&pm8941_lvs2>; //1.8
-		cam_vaf-supply = <&pm8941_l21>;  //2.95
-		qcom,cam-vreg-name = "cam_vdig", "cam_vio", "cam_vana",
-				     "cam_vaf";
-		qcom,cam-vreg-type = <0 1 0 0 0>;
-		qcom,cam-vreg-min-voltage = <1000000 0 2850000 2950000>;
-		qcom,cam-vreg-max-voltage = <1000000 0 2850000 2950000>;
-		qcom,cam-vreg-op-mode = <105000 0 80000 100000>;
-		qcom,gpio-no-mux = <0>;
-
-
-		gpios = <&msmgpio 15 0>, //MCLK
-			<&msmgpio 90 0>,  //RST
-			<&msmgpio 54 0>; //RCAM_PON
-		qcom,gpio-reset = <1>;
-		qcom,gpio-vdig =<2>;
-		qcom,gpio-req-tbl-num = <0 1 2>;
-		qcom,gpio-req-tbl-flags = <1 0 0>;
-		qcom,gpio-req-tbl-label = "CAMIF_MCLK",
-					  "CAM_RESET1",
-            	      "CAM_VDIG";
-		qcom,gpio-set-tbl-num = <0 1 2>;
-		qcom,gpio-set-tbl-flags = <1 0 0>;
-		qcom,gpio-set-tbl-delay = <1000 30000 30000>;
-
-
-
-		qcom,csi-lane-assign = <0x4320>;
-		qcom,csi-lane-mask = <0x1F>;
-		qcom,sensor-position = <0>;
-		qcom,sensor-mode = <1>;
-	        qcom,sensor-type = <0>;
-		qcom,cci-master = <0>;
-		status = "ok";
-	};
-*/
 
 	qcom,camera@6c {
 		compatible = "qcom,ov5693";
