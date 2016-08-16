@@ -36,6 +36,11 @@
 #endif
 #include <linux/debugfs.h>
 
+#define sstrtoul(...) kstrtoul(__VA_ARGS__)
+
+/* DT2W support */
+#define SYNA_TAPTOWAKE
+
 #define PDT_PROPS (0x00EF)
 #define PDT_START (0x00E9)
 #define PDT_END (0x000A)
@@ -48,6 +53,9 @@
 #define SYNAPTICS_RMI4_F12 (0x12)
 #define SYNAPTICS_RMI4_F1A (0x1a)
 #define SYNAPTICS_RMI4_F34 (0x34)
+#ifdef SYNA_TAPTOWAKE
+#define SYNAPTICS_RMI4_F51 (0x51)
+#endif
 #define SYNAPTICS_RMI4_F54 (0x54)
 #define SYNAPTICS_RMI4_F55 (0x55)
 
@@ -233,6 +241,11 @@ struct synaptics_rmi4_data {
 	unsigned short f01_cmd_base_addr;
 	unsigned short f01_ctrl_base_addr;
 	unsigned short f01_data_base_addr;
+#ifdef SYNA_TAPTOWAKE
+	unsigned short f12_ctrl_base_addr;
+	unsigned char f12_ctrl_20_offset;
+	unsigned short f51_data_base_addr;
+#endif
 	int irq;
 	int sensor_max_x;
 	int sensor_max_y;
