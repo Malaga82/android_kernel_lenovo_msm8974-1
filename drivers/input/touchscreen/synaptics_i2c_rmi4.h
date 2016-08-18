@@ -31,8 +31,6 @@
 #ifdef CONFIG_FB
 #include <linux/notifier.h>
 #include <linux/fb.h>
-#elif defined CONFIG_HAS_EARLYSUSPEND
-#include <linux/earlysuspend.h>
 #endif
 #include <linux/debugfs.h>
 
@@ -175,10 +173,9 @@ struct synaptics_rmi4_device_info {
  * @rmi4_io_ctrl_mutex: mutex for i2c i/o control
  * @det_work: work thread instance for expansion function detection
  * @det_workqueue: pointer to work queue for work thread instance
- * @early_suspend: instance to support early suspend power management
  * @current_page: current page in sensor to acess
  * @button_0d_enabled: flag for 0d button support
- * @full_pm_cycle: flag for full power management cycle in early suspend stage
+ * @full_pm_cycle: flag for full power management cycle
  * @num_of_intr_regs: number of interrupt registers
  * @f01_query_base_addr: query base address for f01
  * @f01_cmd_base_addr: command base address for f01
@@ -214,9 +211,6 @@ struct synaptics_rmi4_data {
 	struct mutex rmi4_io_ctrl_mutex;
 	struct delayed_work det_work;
 	struct workqueue_struct *det_workqueue;
-#ifdef CONFIG_HAS_EARLYSUSPEND
-	struct early_suspend early_suspend;
-#endif
 	struct dentry *dir;
 	char fw_image_name[NAME_BUFFER_SIZE];
 	unsigned char current_page;
@@ -259,10 +253,6 @@ struct synaptics_rmi4_data {
 	int (*reset_device)(struct synaptics_rmi4_data *rmi4_data);
 #ifdef CONFIG_FB
 	struct notifier_block fb_notif;
-#else
-#ifdef CONFIG_HAS_EARLYSUSPEND
-	struct early_suspend early_suspend;
-#endif
 #endif
 	struct class *tp_class;
 	int index;
