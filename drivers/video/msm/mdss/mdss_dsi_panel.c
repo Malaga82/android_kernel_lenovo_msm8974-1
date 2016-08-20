@@ -374,6 +374,18 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 	}
 }
 
+void mdss_dsi_panel_outdoor_set(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
+		int on)
+{
+	if (gpio_is_valid(ctrl_pdata->bl_outdoor_gpio)) {
+		gpio_set_value(ctrl_pdata->bl_outdoor_gpio, on > 0 ? 1 : 0);
+		pr_info("%s: Set bl_outdoor_gpio val=%d", __func__, on > 0 ? 1 : 0);
+	}
+
+	return;
+
+}
+
 static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 {
 	struct mipi_panel_info *mipi;
@@ -412,8 +424,8 @@ static int mdss_dsi_panel_off(struct mdss_panel_data *pdata)
 
 	if (gpio_is_valid(ctrl->disp_en_gpio))
 		gpio_set_value((ctrl->disp_en_gpio), 0);
-	if (gpio_is_valid(ctrl->bl_outdoor_gpio))
-		gpio_set_value(ctrl->bl_outdoor_gpio, 0);
+
+	mdss_dsi_panel_outdoor_set(ctrl, 0);
 
 	pr_debug("%s: ctrl=%p ndx=%d\n", __func__, ctrl, ctrl->ndx);
 

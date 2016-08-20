@@ -52,6 +52,9 @@
 extern void mdss_dsi_panel_cmds_send(struct mdss_dsi_ctrl_pdata *ctrl,
 		struct dsi_panel_cmds *pcmds);
 
+extern void mdss_dsi_panel_outdoor_set(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
+		int on);
+
 static int parse_dsi_cmds(struct dsi_panel_cmds *pcmds, const uint8_t *cmd, int blen)
 {
 	int len;
@@ -272,6 +275,12 @@ static void mdss_livedisplay_worker(struct work_struct *work)
 	// Parse the command and send it
 	ret = parse_dsi_cmds(&dsi_cmds, mlc->cmd_buf, len);
 	if (ret == 0) {
+		// Set bl_outdoor_gpio
+		if (mlc->sre_level == SRE_OFF) {
+			mdss_dsi_panel_outdoor_set(ctrl_pdata, 0);
+		} else {
+			mdss_dsi_panel_outdoor_set(ctrl_pdata, 1);
+		}
 		mdss_dsi_panel_cmds_send(ctrl_pdata, &dsi_cmds);
 	} else {
 		pr_err("%s: error parsing DSI command! ret=%d", __func__, ret);
