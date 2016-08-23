@@ -19,7 +19,9 @@
 #include <mach/gpiomux.h>
 #include <mach/socinfo.h>
 
+#if defined(CONFIG_KS8851) || defined(CONFIG_KS8851_MODULE)
 #define KS8851_IRQ_GPIO 94
+#endif
 
 #define WLAN_CLK	40
 #define WLAN_SET	39
@@ -217,6 +219,18 @@ static struct msm_gpiomux_config msm8974_quat_mi2s_configs[] __initdata = {
     },
 };
 #endif
+
+static struct gpiomux_setting gpio_spi_config = {
+	.func = GPIOMUX_FUNC_GPIO, /*active 0*/ /* 3 */
+	.drv = GPIOMUX_DRV_2MA,
+	.pull = GPIOMUX_PULL_NONE,
+};
+static struct gpiomux_setting gpio_spi_susp_config = {
+	.func = GPIOMUX_FUNC_GPIO,
+	.drv = GPIOMUX_DRV_2MA,
+	.pull = GPIOMUX_PULL_DOWN,
+};
+
 #if defined(CONFIG_KS8851) || defined(CONFIG_KS8851_MODULE)
 static struct gpiomux_setting gpio_eth_config = {
 	.pull = GPIOMUX_PULL_UP,
@@ -227,17 +241,6 @@ static struct gpiomux_setting gpio_eth_config = {
 static struct gpiomux_setting gpio_spi_cs2_config = {
 	.func = GPIOMUX_FUNC_4,
 	.drv = GPIOMUX_DRV_6MA,
-	.pull = GPIOMUX_PULL_DOWN,
-};
-
-static struct gpiomux_setting gpio_spi_config = {
-		.func = GPIOMUX_FUNC_GPIO, /*active 0*/ /* 3 */
-		.drv = GPIOMUX_DRV_2MA,
-	.pull = GPIOMUX_PULL_NONE,
-};
-static struct gpiomux_setting gpio_spi_susp_config = {
-	.func = GPIOMUX_FUNC_GPIO,
-	.drv = GPIOMUX_DRV_2MA,
 	.pull = GPIOMUX_PULL_DOWN,
 };
 
@@ -815,28 +818,28 @@ static struct msm_gpiomux_config msm_r63319_configs[] __initdata = {
 
 };
 static struct msm_gpiomux_config msm_blsp_configs[] __initdata = {
-#if defined(CONFIG_KS8851) || defined(CONFIG_KS8851_MODULE)
-	{
+	{	/* NFC_eSE_SPI_MOSI */
 		.gpio      = 0,		/* BLSP1 QUP SPI_DATA_MOSI */
 		.settings = {
 			[GPIOMUX_ACTIVE] = &gpio_spi_config,
 			[GPIOMUX_SUSPENDED] = &gpio_spi_susp_config,
 		},
 	},
-	{
+	{	/* NFC_eSE_SPI_MISO */
 		.gpio      = 1,		/* BLSP1 QUP SPI_DATA_MISO */
 		.settings = {
 			[GPIOMUX_ACTIVE] = &gpio_spi_config,
 			[GPIOMUX_SUSPENDED] = &gpio_spi_susp_config,
 		},
 	},
-	{
+	{	/* NFC_eSE_SPI_MCLK */
 		.gpio      = 3,		/* BLSP1 QUP SPI_CLK */
 		.settings = {
 			[GPIOMUX_ACTIVE] = &gpio_spi_config,
 			[GPIOMUX_SUSPENDED] = &gpio_spi_susp_config,
 		},
 	},
+#if defined(CONFIG_KS8851) || defined(CONFIG_KS8851_MODULE)
 	{
 		.gpio      = 9,		/* BLSP1 QUP SPI_CS2A_N */
 		.settings = {
