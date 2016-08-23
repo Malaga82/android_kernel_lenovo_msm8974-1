@@ -14,7 +14,7 @@
 &pm8941_lsid1 {
 	qcom,leds@d000 {
 		compatible = "qcom,leds-qpnp";
-    		status = "okay";
+		status = "okay";
 		qcom,rgb_0 {
 			label = "rgb";
 			linux,name = "led:rgb_red";
@@ -24,8 +24,8 @@
 			qcom,max-current = <12>;
 			qcom,default-state = "off";
 			qcom,id = <3>;
-			qcom,start-idx=<0>;
-			qcom,duty-pcts=[ 00 0E 1C 2A 38 46 54 64 ];
+			qcom,start-idx = <0>;
+			qcom,duty-pcts = [ 00 0E 1C 2A 38 46 54 64 ];
 			qcom,pause-lo = <500>;
 			qcom,pause-hi = <500>;
 			qcom,ramp-step-ms = <50>;
@@ -43,8 +43,8 @@
 			qcom,max-current = <12>;
 			qcom,default-state = "off";
 			qcom,id = <4>;
-			qcom,start-idx=<8>;
-			qcom,duty-pcts=[ 00 0E 1C 2A 38 46 54 64 ];
+			qcom,start-idx = <8>;
+			qcom,duty-pcts = [ 00 0E 1C 2A 38 46 54 64 ];
 			qcom,pause-lo = <500>;
 			qcom,pause-hi = <500>;
 			qcom,ramp-step-ms = <50>;
@@ -61,8 +61,8 @@
 			qcom,pwm-us = <1000>;
 			qcom,max-current = <12>;
 			qcom,id = <5>;
-			qcom,start-idx=<16>;
-			qcom,duty-pcts=[ 00 0E 1C 2A 38 46 54 64 ];
+			qcom,start-idx = <16>;
+			qcom,duty-pcts = [ 00 0E 1C 2A 38 46 54 64 ];
 			qcom,pause-lo = <500>;
 			qcom,pause-hi = <500>;
 			qcom,ramp-step-ms = <50>;
@@ -83,6 +83,8 @@
 	qcom,leds@d300 {
 		compatible = "qcom,leds-qpnp";
 		status = "okay";
+
+		/* Flash */
 		pm8941_flash0: qcom,flash_0 {
 			qcom,max-current = <1000>;
 			qcom,default-state = "off";
@@ -115,6 +117,7 @@
 			qcom,current = <625>;
 		};
 
+		/* Torch */
 		pm8941_torch0: qcom,flash_torch_0 {
 			qcom,max-current = <200>;
 			qcom,default-state = "off";
@@ -198,17 +201,6 @@
 
 	qcom,leds@e100 {
 		status = "disabled";
-	};
-
-        qcom,vib@c000{
-		status = "okay";
-		compatible = "qcom,qpnp-vibrator";
-		reg = <0xc000 0x100>;
-		label = "vibrator";
-		qcom,vib-timeout-ms = <15000>;
- 		qcom,vib-vtg-level-mV = <2850>;
-		qcom,vib-vtg-max-mV = <3100>;
-		qcom,vib-vtg-min-mV = <1200>;
 	};
 
 	qcom,leds@e200 {

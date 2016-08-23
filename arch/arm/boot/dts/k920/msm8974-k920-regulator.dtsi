@@ -437,7 +437,7 @@
 	rpm-regulator-vsa1 {
 		status = "okay";
 		pm8941_lvs1: regulator-lvs1 {
-		    regulator-always-on;
+			regulator-always-on;
 			status = "okay";
 		};
 	};

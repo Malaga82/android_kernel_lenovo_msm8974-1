@@ -38,10 +38,12 @@
 };
 
 &mdss_dsi0 {
-	/* using gpios in mdss_dsi1 */
-	/delete-property/ qcom,platform-reset-gpio;
-	/delete-property/ qcom,platform-enable-gpio;
-	/delete-property/ qcom,platform-te-gpio;
+	qcom,platform-vsn-gpio = <&msmgpio 14 0>;
+	qcom,platform-vsp-gpio = <&msmgpio 16 0>;
+	qcom,platform-reset-gpio = <&pm8941_gpios 19 0>;
+	qcom,platform-enable-gpio = <&pm8941_gpios 13 0>;
+	qcom,platform-outdoor-gpio = <&msmgpio 64 0>;
+	qcom,platform-te-gpio = <&msmgpio 12 0>;
 
 	qcom,platform-lane-config = [
 			00 00 00 00 00 00 00 01 97
@@ -53,13 +55,6 @@
 };
 
 &mdss_dsi1 {
-	qcom,platform-vsn-gpio = <&msmgpio 14 0>;
-	qcom,platform-vsp-gpio = <&msmgpio 16 0>;
-	qcom,platform-reset-gpio = <&pm8941_gpios 19 0>;
-	qcom,platform-enable-gpio = <&pm8941_gpios 13 0>;
-	qcom,platform-outdoor-gpio = <&msmgpio 64 0>;
-	qcom,platform-te-gpio = <&msmgpio 12 0>;
-
 	qcom,platform-lane-config = [
 			00 00 00 00 00 00 00 01 97
 			00 00 00 00 05 00 00 01 97
