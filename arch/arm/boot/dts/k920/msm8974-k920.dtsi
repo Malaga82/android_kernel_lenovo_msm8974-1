@@ -223,17 +223,29 @@
 		};
 	};
 
+	/* NFC_eSE_SPI */
 	spi@f9923000 {
-		ethernet-switch@2 {
-			compatible = "micrel,ks8851";
-			reg = <2>;
-			interrupt-parent = <&msmgpio>;
-			interrupts = <94 0>;
-			spi-max-frequency = <4800000>;
-			rst-gpio = <&pm8941_mpps 6 0>;
-			vdd-io-supply = <&spi_eth_vreg>;
-			vdd-phy-supply = <&spi_eth_vreg>;
-		};
+		compatible = "qcom,spi-qup-v2";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reg-names = "spi_physical", "spi_bam_physical";
+		reg = <0xf9923000 0x1000>,
+		      <0xf9904000 0x19000>;
+		interrupt-names = "spi_irq", "spi_bam_irq";
+		interrupts = <0 95 0>, <0 238 0>;
+		spi-max-frequency = <19200000>;
+
+		qcom,gpio-mosi = <&msmgpio 0 0>;
+		qcom,gpio-miso = <&msmgpio 1 0>;
+		qcom,gpio-clk  = <&msmgpio 3 0>;
+		qcom,gpio-cs0  = <&msmgpio 2 0>;
+
+		qcom,infinite-mode = <0>;
+		qcom,use-bam;
+		qcom,ver-reg-exists;
+		qcom,bam-consumer-pipe-index = <12>;
+		qcom,bam-producer-pipe-index = <13>;
+		qcom,master-id = <86>;
 	};
 
 	sound {

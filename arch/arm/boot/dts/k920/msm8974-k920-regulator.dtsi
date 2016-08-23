@@ -536,13 +536,6 @@
 		};
 	};
 
-	spi_eth_vreg: spi_eth_phy_vreg {
-		compatible = "regulator-fixed";
-		regulator-name = "ethernet_phy";
-		/*gpio = <&pm8941_mpps 5 0>;*/
-		enable-active-high;
-	};
-
 	/*
 	 * vph_pwr_vreg represents the unregulated battery voltage supply
 	 * VPH_PWR that is present whenever the device is powered on.
