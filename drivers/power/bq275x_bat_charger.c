@@ -47,11 +47,6 @@
 #include <linux/of_gpio.h>
 #include <linux/rtc.h>
 #include "bq275x_firmware.h"
-#ifdef CONFIG_FB
-#include <linux/notifier.h>
-#include <linux/fb.h>
-#endif
-#include <linux/qpnp/power-on.h>
 
 #ifdef DEBUG
 #define DBG(fmt...) printk(KERN_DEBUG fmt)
@@ -60,9 +55,6 @@
 #endif
 
 #define DRIVER_VERSION			"1.2.0"
-
-#define SUPPORT_QPNP_VBUS_OVP
-//#define BQ_WRITE_TEMP
 
 #define BQ27530_REG_CNTL		0x00 /*control*/
 #define BQ27x00_REG_TEMP		0x06 /*Temperature*/
@@ -82,7 +74,6 @@
 #define BQ27500_REG_PCAI		0x1E /*get Charging Current*/
 #define BQ27500_REG_PCV			0x20 /*get Charging Voltage*/
 #define BQ27500_REG_SOC			0x2C /*SOC*/
-#define BQ27500_REG_TRUESOC		0x2E /*TRUE SOC*/
 #define BQ27x00_REG_TTE			0x16 /*TimeToEmpty*/
 #define BQ27x00_REG_NAC			0x0C /* Nominal available capaciy */
 #define BQ27x00_REG_FAC			0x0E /* Full Available capaciy */
@@ -183,7 +174,7 @@
 #define BQ24192I_IC_VERSION			0x3
 
 #define BATT_TEMP_MAX			600
-#define BATT_VOLT_MAX			4425
+#define BATT_VOLT_MAX			4400
 #define BATT_VOLT_MIN			3000
 
 #define BQ_I2C_VTG_MIN_UV	1800000
@@ -191,15 +182,6 @@
 #define BQ_I2C_LOAD_UA	10000
 #define BQ_I2C_LPM_LOAD_UA	10
 
-#define BQ_BATT_TEMP_OFFSET	20
-
-#define BATT_VENDOR_LG			1
-#define BATT_VENDOR_ATL_AND_DUMY	2
-
-#define BATT_FW_VER_LG		0xAC02
-#define BATT_FW_VER_ATL		0xAD02
-
-extern long qpnp_batt_id;
 int soc_prev = 0;
 volatile int rd_count=0;
 volatile int htemp_cnt=0;
@@ -282,32 +264,7 @@ struct bq27x00_device_info {
 	struct mutex lock;
 	struct wake_lock wakelock;
 	struct wake_lock lowcap_wakelock;
-
-	int is_rom_mode;
-	int fw_dw_done;
-	int is_suspend;
-	int soc_reset;
-	int reset_p;
-	int present_check_count;
-
-#ifdef SUPPORT_QPNP_VBUS_OVP
-	struct delayed_work vbus_work;
-	int vbus_ovp;
-#endif
-#ifdef CONFIG_FB
-        struct notifier_block fb_notif;
-#endif
-        struct notifier_block kpdpwr_notif;
-	int thermal_mitigation;
-	struct delayed_work boot_work;
-
-	int battery_vendor_index;
 };
-
-#ifdef SUPPORT_QPNP_VBUS_OVP
-extern int qpnp_check_vbus_ovp(int *vusb);
-static int vusb_uv = 0;
-#endif
 
 struct bq27x00_device_info *bqdi = NULL;
 
@@ -334,34 +291,6 @@ static enum power_supply_property bq24912_usb_props[] = {
 	POWER_SUPPLY_PROP_MANUFACTURER
 };
 
-int g_call_status = 0;
-
-enum iinlim_level {
-    IINLIM_100 = 0,
-    IINLIM_150,
-    IINLIM_500,
-    IINLIM_900,
-    IINLIM_1200,
-    IINLIM_1500,
-    IINLIM_2000,
-    IINLIM_3000,
-};
-
-#ifdef CONFIG_FB
-int fb_status = FB_BLANK_UNBLANK;
-static int fb_notifier_callback(struct notifier_block *self,
-				unsigned long event, void *data);
-static int bq27531_config_charging_current(struct bq27x00_device_info *di, int level);
-#endif
-static void configure_fb_notifiler(struct bq27x00_device_info *di);
-static int bq27531_op_thermal_mitigation(struct bq27x00_device_info *di, int level);
-static int bq27531_op_set_input_limit(struct bq27x00_device_info *di, int value);
-static int bq27531_charge_ic_reset(void);
-static int bq27531_soc_reset(void);
-static int bq27531_charge_hiz_reset(void);
-static inline int bq27x00_read(struct bq27x00_device_info *di, u8 reg,
-		bool single);
-
 static unsigned int bc_fw = 0;
 static unsigned int uart_switch = 0;
 static unsigned int switch_to_uart = 0;
@@ -387,16 +316,11 @@ static unsigned int delay_t = 30000;//30s
 module_param(delay_t, uint, 0644);
 MODULE_PARM_DESC(delay_t, "The value is charge state update time");
 
-int force_check_thermal = -1;
-int boot_done = 0;
-
 extern int bq24192_is_usbin_present(void);
 extern int bq24192_get_usbin_health(void);
 extern int bq24192_is_usbin_hostmode(void);
-#ifdef BQ_WRITE_TEMP
 static int bq27531_data_flash_write(struct bq27x00_device_info *di,unsigned char sub_class,
 				unsigned char offset,unsigned char new_value);
-#endif
 static int ovp_check_cnt = 0;
 /*
  * Common code for BQ27x00 devices
@@ -439,19 +363,11 @@ static int last_report_soc = -1;
 static int last_cache_soc = 0;
 static int delta_soc = 0;
 static int batt_status = 0;//0:discharging,1:charing
-static unsigned long reset_time = 0;	/*The time when reset*/
-
 int calculate_report_soc(struct bq27x00_device_info *di)
 {
 	unsigned long now_tm_sec = 0;
-	int delta_time;
-	int low_vol_delta_time;
+	int delta_time,low_vol_delta_time;
 	int current_now;
-	int current_reset;	/*current when soc reset*/
-	int fg_pc_volt;
-	int rsoc = -1;
-	int tsoc = -1;		/*true soc*/
-	int d_soc;		/*The different between truesoc and soc*/
 
 	di->usb_present = bq24192_is_usbin_present();
 	di->host_mode = bq24192_is_usbin_hostmode();
@@ -472,12 +388,8 @@ int calculate_report_soc(struct bq27x00_device_info *di)
 		if(last_report_soc > 0){
 			current_now = (int)((s16)di->cache.current_now);
 			/*printk("%s:temp=%d,voltage=%d,curr=%d,batt_status=%d.\n",__func__,di->cache.temperature,di->cache.voltage,current_now,batt_status);*/
-			fg_pc_volt = bq27x00_read(di,BQ27500_REG_PCV,false);
-			if(di->cache.temperature-2731 >= 450
-					&& di->cache.temperature-2731 < 500
-					&& (fg_pc_volt == 4112)
-					&& di->cache.voltage >= 4100
-					&& current_now < 500){
+			if(di->cache.temperature-2731 >= 450 && di->cache.temperature-2731 < 500 
+				&& di->cache.voltage >= 4100 && current_now < 500){
 				if(delta_time > 20 && last_report_soc < 100){
 					di->cache.capacity = last_report_soc+1;
 				}else{
@@ -503,6 +415,9 @@ int calculate_report_soc(struct bq27x00_device_info *di)
 						__func__,delta_soc,delta_time,di->cache.capacity,last_report_soc);
 				}
 			}
+			if(di->cache.capacity >= 100 && last_report_soc != 100 && current_now > 400 && delta_time < 720){
+				di->cache.capacity = 99;
+			}
 			/*printk("%s:cache_cap=%d,report_soc=%d,del_time=%d.\n",__func__,di->cache.capacity,last_report_soc,delta_time);*/
 		}
 	}else{
@@ -520,7 +435,7 @@ int calculate_report_soc(struct bq27x00_device_info *di)
 				printk("%s discharging:report last_soc=%d.\n",__func__,last_report_soc);
 				di->cache.capacity = last_report_soc;
 			}else if((last_report_soc-di->cache.capacity) > 1){
-				if(delta_time < 30){
+				if(delta_time < 120){
 					di->cache.capacity = last_report_soc;
 				}else if(delta_time < 600){
 					di->cache.capacity = last_report_soc-1;
@@ -530,14 +445,13 @@ int calculate_report_soc(struct bq27x00_device_info *di)
 			}
 		}
 
-		if(di->cache.voltage <= 3400){
+		if(di->cache.voltage <= 3300){
 			if(low_vol_start_time > 0){
 				low_vol_delta_time = now_tm_sec - low_vol_start_time;
-				dev_info(di->dev,"low_vol_delta_time=%d,low_vol_start_time=%ld.\n",low_vol_delta_time,low_vol_start_time);
+				pr_debug("low_vol_delta_time=%d,low_vol_start_time=%ld.\n",low_vol_delta_time,low_vol_start_time);
 				if(low_vol_delta_time > 60){
-					dev_info(di->dev,"report for low voltage,cache_cap=%d.\n",di->cache.capacity);
-					di->cache.capacity = 0;
-					// ? low_vol_start_time = now_tm_sec;
+					pr_debug("report cap=1 for low voltage,cache_cap=%d.\n",di->cache.capacity);
+					di->cache.capacity = 1;
 				}
 			}else{
 				low_vol_start_time = now_tm_sec;
@@ -547,25 +461,15 @@ int calculate_report_soc(struct bq27x00_device_info *di)
 		}
 
 		if(di->cache.capacity <= 1){
-			bq27531_charge_ic_reset();
-			if(last_report_soc > 0){
-				if(delta_time < 20){
-					di->cache.capacity = last_report_soc;
-				}else{
+			if(di->cache.voltage <= 3300 || (di->cache.flags&0x2) == 0x2){
+				di->cache.capacity = 1;
+				pr_debug("report cap=1.\n");
+			}else{
+				if(last_report_soc > 2)
 					di->cache.capacity = last_report_soc-1;
-				}
-			}
-			dev_info(di->dev,"availabe remain capcity,report cap=%d.\n",last_report_soc);
-
-			if(di->cache.capacity == 0){
-				if(g_call_status){
-					di->cache.capacity = 1;
-				} else if(di->cache.voltage <= 3400 || (di->cache.flags&0x2) == 0x2){
-					di->cache.capacity = 0;
-					dev_info(di->dev,"report cap=0.\n");
-				} else {
-					di->cache.capacity = 1;
-				}
+				else
+					di->cache.capacity = last_report_soc;
+				pr_debug("availabe remain capcity,report cap=%d.\n",last_report_soc);
 			}
 		}else{
 			if(wake_lock_active(&di->lowcap_wakelock))
@@ -580,52 +484,8 @@ int calculate_report_soc(struct bq27x00_device_info *di)
 
 	if(di->cache.capacity > 100)
 		di->cache.capacity = 100;
-
 	last_report_soc = di->cache.capacity;
 
- 	/* "Liulf8 begin" Reset soc when truesoc is different between soc.Not allow twice reset in 6 hours*/
-	/*d_soc > 10 means soc is abnormal.d_soc = |true_soc - soc|*/
-	rsoc = bq27x00_read(di, BQ27500_REG_SOC, false);
-	tsoc = bq27x00_read(di, BQ27500_REG_TRUESOC, false);
-
-	d_soc = rsoc - tsoc;
-	if(d_soc < 0)
-		d_soc = 0 - d_soc;
-
-	current_now = bq27x00_read(di, BQ27x00_REG_AI, false);
-	if(current_now < 0)
-		current_reset = 0 - current_now;
-	else 
-		current_reset = current_now;
-
-	if((d_soc > 10) && di->reset_p)
-		printk("%s: vol = soc=%d,tsoc=%d.\n", __func__, rsoc, tsoc);
-
-	if(di->reset_p)
-		if((now_tm_sec - reset_time) > 21600)
-			di->reset_p = 0;
-		
-	if ((di->cache.temperature-2731 >= 200) && (di->cache.temperature-2731 <= 400)&&(!di->reset_p) && (!di->soc_reset) && (di->fw_dw_done)) {
-		if((d_soc > 10)&&(d_soc < 15) && (current_reset < 500)) {
-			printk("%s: fg reset 10, %d,%d,%d,%d\n", __func__, di->cache.temperature-2731, current_now, rsoc, tsoc);
-				bq27531_soc_reset();
-				reset_time = now_tm_sec;
-				di->reset_p = 1;
-		}else if(d_soc > 15){
-			printk("%s: fg reset 15, %d,%d,%d,%d\n", __func__, di->cache.temperature-2731, current_now, rsoc, tsoc);
-				bq27531_soc_reset();
-				reset_time = now_tm_sec;
-				di->reset_p = 1;
-			
-		}
-	}else if((d_soc > 20) && (!di->reset_p) && (!di->soc_reset) && (di->fw_dw_done)){
-			printk("%s: fg reset T, %d,%d,%d,%d\n", __func__, di->cache.temperature-2731, current_now, rsoc, tsoc);
-				bq27531_soc_reset();
-				reset_time = now_tm_sec;
-				di->reset_p = 1;
-		}
- 	/* "Liulf8 end" Reset soc when truesoc is different between soc.Not allow twice reset in 6 hours*/
-	
 	return 0;
 
 }
@@ -704,9 +564,6 @@ static int bq27x00_read_i2c(struct bq27x00_device_info *di, u8 reg, bool single)
 	if (!client->adapter)
 		return -ENODEV;
 
-	if (di->is_rom_mode)
-		return -ENODEV;
-
 	msg[0].addr = client->addr;
 	msg[0].flags = 0;
 	msg[0].buf = &reg;
@@ -721,7 +578,6 @@ static int bq27x00_read_i2c(struct bq27x00_device_info *di, u8 reg, bool single)
 
 	ret = i2c_transfer(client->adapter, msg, ARRAY_SIZE(msg));
 	if (ret < 0){
-		printk("%s: 1reg:0x%x, err:0x%x.\n", __func__, reg, ret);
 		for(i=0;i<3;i++){
 			ret = i2c_transfer(client->adapter, msg, ARRAY_SIZE(msg));
 			if(ret > 0)
@@ -748,9 +604,6 @@ static int bq27x00_write_i2c(struct bq27x00_device_info *di, u8 reg, int num, un
 	if (!client->adapter)
 		return -ENODEV;
     
-	if (!rom_mode && di->is_rom_mode)
-		return -ENODEV;
-
 	data = kzalloc(sizeof(char) * (num+1), GFP_KERNEL);
     
     data[0] = reg;
@@ -769,8 +622,6 @@ static int bq27x00_write_i2c(struct bq27x00_device_info *di, u8 reg, int num, un
     /*printk("%s: i2c addr0 is 0x%x, addr1=0x%x \n",__func__,msg[0].addr,msg[1].addr);*/
 
     ret = i2c_transfer(client->adapter, msg, ARRAY_SIZE(msg));
-	if (ret < 0)
-		printk("%s: reg:0x%x, err:0x%x.\n", __func__, reg, ret);
     /*ret = i2c_master_send(client, data, num+1);*/
     
     kfree(data);
@@ -797,15 +648,13 @@ static void bq24192_set_chrg_type(struct bq27x00_device_info *di)
             break;
         case POWER_SUPPLY_TYPE_BATTERY:
             di->usb_online = 0;
-	    di->mains_online = 0;
-#if 0
-	    if(bq24192_is_usbin_present() == 0)
-		    popup_usb_select_window(2);
-#endif
-	    break;
-	default:
-	    printk("%s:defalt chg_type",__func__);
-	    break;
+            di->mains_online = 0;
+			//if(bq24192_is_usbin_present() == 0)
+			//	popup_usb_select_window(2);
+            break;
+        default:
+		    printk("%s:defalt chg_type",__func__);
+            break;
     } 
 }
 
@@ -831,19 +680,16 @@ static int bq27x00_battery_read_temp(struct bq27x00_device_info *di)
 	int temp;
 
 	temp = bq27x00_read(di, BQ27x00_REG_TEMP, false);
-	temp = temp - BQ_BATT_TEMP_OFFSET;
-	printk("bq275x %s temp: %d\n", __func__, temp);
-
 	if(temp - 2731 < 580){
 		temp_prev = temp;
 		htemp_cnt = 0;
 	}else if(temp - 2731 >= 580){
 		htemp_cnt++;
 		if(htemp_cnt <= 3){
-			dev_info(di->dev,"High temp detect %dC %d times!\n",temp,htemp_cnt);
+			pr_err("bq27x00_battery: High temp detect %dC %d times!\n",temp,htemp_cnt);
 			temp = temp_prev;
 		}else{
-			dev_info(di->dev,"High temp detect:%dC %d times,report it!\n",temp,htemp_cnt);
+			pr_err("bq27x00_battery: High temp detect:%dC %d times,report it!\n",temp,htemp_cnt);
 			temp_prev = temp;
 			htemp_cnt = 0;
 		}
@@ -867,7 +713,7 @@ static int bq27x00_battery_read_rsoc(struct bq27x00_device_info *di)
 	if(rsoc >= 0 && rsoc <= 100){
 		if(rsoc != last_cache_soc)
 			delta_soc = rsoc - last_cache_soc;
-		DBG("%s:delta_soc=%d,rsoc=%d,last_cap=%d.\n",
+		DBG(di->dev, "%s:delta_soc=%d,rsoc=%d,last_cap=%d.\n",
 			__func__,delta_soc,rsoc,last_cache_soc);
 		last_cache_soc = rsoc;
 	}
@@ -890,10 +736,10 @@ static int bq27x00_battery_read_rsoc(struct bq27x00_device_info *di)
 	}else{
 		if(rd_count >= 9){
 			rd_count = 0;
-			dev_info(di->dev,"Low soc %d detect!\n",rsoc);
+			pr_info("bq27x00_battery: Low soc %d detect!\n",rsoc);
 		}else{
 			rd_count++;
-			dev_info(di->dev,"Low soc %d prev %d loop %d!\n",rsoc,soc_prev,rd_count);
+			pr_info("bq27x00_battery: Low soc %d prev %d loop %d!\n",rsoc,soc_prev,rd_count);
 			rsoc = soc_prev;
 		}
 	}
@@ -950,7 +796,7 @@ static void bq27530_set_current(struct bq27x00_device_info *di, enum current_lev
     if(di->board->chg_current != cl){
 			gpio_set_value_cansleep(di->board->chg_psel_gpio, val);
 			di->board->chg_current = cl;
-			printk("%s: bq27530 set  %s .\n", __func__, cl ? "current high":"current low");
+			/*printk("bq27530 set  %s .\n",cl ? "current high":"current low");*/
     }
 
     return;
@@ -961,14 +807,9 @@ static void bq27530_enable_charging(struct bq27x00_device_info *di, bool enable)
 
   	int val = !enable;
 	int batt_present = 1;
-	int last_charging_state;
-#if 1
 	unsigned char data;
-#endif
 	int i,ret;
 	bool enable_flag = enable;
-
-	printk("%s enable=%d\n", __func__, enable);
 
     if(di == NULL){
        printk("di is NULL.\n"); 
@@ -985,27 +826,10 @@ static void bq27530_enable_charging(struct bq27x00_device_info *di, bool enable)
 		return;
 	}
 
-	last_charging_state = di->board->chg_en_flag;
-	/* optimistically set the state, change it back later if one of the corner
-	 * cases is triggered. Userspace expects this to be fast and the i2c methods
-	 * below take time which might cause charger mode to abort. */
-        di->board->chg_en_flag = enable;
-
-#ifdef SUPPORT_QPNP_VBUS_OVP
-	di->vbus_ovp = qpnp_check_vbus_ovp(&vusb_uv);
-	printk("%s: vbus is %d\n", __func__, vusb_uv);
-	if(di->vbus_ovp && enable) {
-		di->board->chg_en_flag = last_charging_state;
-		printk("vbus_vop:ignore enable charging.\n");
-		return;
-	}
-#endif
-
 	ret = bq27x00_read(di, BQ27x00_REG_FLAGS, false);
 	batt_present = (ret & BQ27500_FLAG_BAT_DET)>0 ? 1:0;
 	
 	if(!batt_present){//battery is not present
-		di->board->chg_en_flag = last_charging_state;
 		printk("%s:battery is not present.\n",__func__);
 		enable_flag = false;
 		val = !enable_flag;
@@ -1021,8 +845,7 @@ static void bq27530_enable_charging(struct bq27x00_device_info *di, bool enable)
             if(ret > 0)
                 break;
         }
-        printk("%s: read hiz_reg=0x%x,i=%d.\n",__func__,ret,i);
-#if 1
+        pr_debug("read ret 0x%x,i=%d.\n",ret,i);
         if(ret < 0){
             pr_err("bq27530 read charger reg00 err.\n");
         }else{
@@ -1031,26 +854,17 @@ static void bq27530_enable_charging(struct bq27x00_device_info *di, bool enable)
                 data &= ~BQ24192_0_HIZ;
             else
                 data |= BQ24192_0_HIZ;
+            pr_debug("data to write 0x%x.\n",data);
             for(i=0;i<5;i++){
                 ret = bq27x00_write_i2c(di,BQ24192_REG_CTL_0,1,&data,0);
                 if(ret>0)
                     break;
             }
-            printk("%s: write hiz_reg=0x%x,ret=%d,i=%d.\n",__func__,data,ret,i);
+            pr_debug("read ret 0x%x,i=%d.\n",ret,i);
             if(ret <0)
                 pr_err("%s: HIZ mode write error\n",__func__);
         }
-#endif
-#ifdef CONFIG_FB
-        if(enable_flag) {
-		if (fb_status == FB_BLANK_UNBLANK)
-			bq27531_config_charging_current(di, 0);
-		else if (fb_status == FB_BLANK_POWERDOWN)
-			bq27531_config_charging_current(di, 1);
-	}
-#endif
     }else{
-      di->board->chg_en_flag = last_charging_state;
       ret = bq27x00_read_i2c(di, BQ24192_REG_CTL_0, 1);
 			printk("wyh chg disable_force,hiz_reg=%d .\n",ret);
 		}
@@ -1063,7 +877,7 @@ static void fg_reg_show(struct bq27x00_device_info *di)
 	unsigned char data[2]={0};
 	int ret,fg_cont,fg_rm_cap,fg_fc_cap,fg_pc_volt,fg_cc_volt,nac,
 	fac,rcuf,rcf,tc,flags,temp,current_now,voltage,fccu,fccf,soc;
-	int chg_status,ctrl,chrg_por,current_chg,chrg_volt,status,chrg_fault, max_capa;
+	int chg_status,ctrl,chrg_por,current_chg,chrg_volt,status,chrg_fault;
 
 	ret=bq27x00_write_i2c(di,BQ27530_REG_CNTL,2,data,0);
 	if(ret <0){
@@ -1081,10 +895,8 @@ static void fg_reg_show(struct bq27x00_device_info *di)
 	flags = bq27x00_read(di, BQ27x00_REG_FLAGS, false);
 	tc = bq27x00_read(di,0x2E, false);//true capacity
 	temp = bq27x00_read(di, BQ27x00_REG_TEMP, false);
-	temp = temp - BQ_BATT_TEMP_OFFSET;
 	current_now = bq27x00_read(di, BQ27x00_REG_AI, false);
 	voltage = bq27x00_read(di, BQ27x00_REG_VOLT, false);
-	max_capa = bq27x00_read(di, 0x62, false);
 
 	fg_cont = bq27x00_read(di,BQ27530_REG_CNTL, false);
 	fg_rm_cap = bq27x00_read(di,BQ27530_REG_RM,false);
@@ -1099,10 +911,10 @@ static void fg_reg_show(struct bq27x00_device_info *di)
 	chrg_volt = bq27x00_read(di, BQ24192_REG_VOLT_4,true);
 	status = bq27x00_read(di, BQ24192_REG8_STATUS, true);//0x7d
 	chrg_fault = bq27x00_read(di, BQ24192_REG9_FAULT,true);//0x7e
-	dev_info(di->dev,"charger chrg_status=0x%x,ctrl=0x%x,chrg_por=0x%x,curr=0x%x,volt=0x%x,status=0x%x,fault=0x%x.\n",
+	pr_debug("charger chrg_status=0x%x,ctrl=0x%x,chrg_por=0x%x,curr=0x%x,volt=0x%x,status=0x%x,fault=0x%x.\n",
 		chg_status,ctrl,chrg_por,current_chg,chrg_volt,status,chrg_fault);
-	dev_info(di->dev,"nac=0x%x,fac=0x%x,rcuf=0x%x,rcf=0x%x,fccu=0x%x,fccf=0x%x.\n soc=%d,flags=0x%x,tc=0x%x,temp=%d,current_now=%d,voltage=%d,max_capa=%d.\n",
-					nac,fac,rcuf,rcf,fccu,fccf,soc,flags,tc,temp,current_now,voltage,max_capa);
+	pr_debug("nac=0x%x,fac=0x%x,rcuf=0x%x,rcf=0x%x,fccu=0x%x,fccf=0x%x.\n soc=%d,flags=0x%x,tc=0x%x,temp=%d,current_now=%d,voltage=%d.\n",
+					nac,fac,rcuf,rcf,fccu,fccf,soc,flags,tc,temp,current_now,voltage);
 }
 
 static void bq27x00_update(struct bq27x00_device_info *di)
@@ -1122,9 +934,9 @@ static void bq27x00_update(struct bq27x00_device_info *di)
 	chrg_type_double_check(di);
 
 	if(di->mains_online){
-	   bq27530_set_current(di,CURRENT_HIGH);
+      bq27530_set_current(di,CURRENT_HIGH);
 	}else{
-	   bq27530_set_current(di,CURRENT_LOW);
+      bq27530_set_current(di,CURRENT_LOW);
 	}
 
 	/* Ignore current_now which is a snapshot of the current battery state
@@ -1135,48 +947,12 @@ static void bq27x00_update(struct bq27x00_device_info *di)
 	}
 
 	di->last_update = jiffies;
-	dev_info(di->dev, "usb_p=%d,host_m=%d,chg_t=%d,cap=%d,temp=%d,curr=%d,vol=%d,flag=0x%x,cl=%d\n",
+	pr_debug("usb_p=%d,host_m=%d,chg_t=%d,cap=%d,temp=%d,curr=%d,vol=%d,flag=0x%x,cl=%d\n",
 			di->usb_present,di->host_mode,di->chrg_type,cache.capacity,(cache.temperature - 2731),
 			(int)((s16)cache.current_now),cache.voltage,cache.flags,
 			di->board->chg_current);
 	fg_reg_show(di);
 }
-
-#ifdef SUPPORT_QPNP_VBUS_OVP
-static void bq27x00_charger_vbus_check(struct work_struct *work)
-{
-	struct bq27x00_device_info *di =
-		container_of(work, struct bq27x00_device_info, vbus_work.work);
-	int ret;
-
-	di->usb_ovp = bq24192_get_usbin_health();
-	di->vbus_ovp = qpnp_check_vbus_ovp(&vusb_uv);
-
-	//printk("%s usb_health =%d, vbus_ovp=%d.\n",__func__,di->usb_ovp,di->vbus_ovp);
-
-	ret = bq27x00_read(di, BQ27x00_REG_FLAGS, false);
-	if (!(ret & BQ27500_FLAG_BAT_DET)) {
-		power_supply_changed(&di->bat);
-		return;
-	}
-
-	if (di->usb_ovp == USBIN_OK) {
-        	if (di->board->chg_en_flag != (!di->vbus_ovp)) {
-			if (di->vbus_ovp) {
-				pr_err("%s, vbus ovp, stop charging\n", __func__);
-				bq27530_enable_charging(di,false);
-			} else {
-				pr_err("%s, vbus ok, start charging\n", __func__);
-				bq27530_enable_charging(di,true);
-			}
-			power_supply_changed(&di->bat);
-		}
-		schedule_delayed_work(&di->vbus_work, msecs_to_jiffies(1000));
-	}
-
-	return;
-}
-#endif
 
 static void bq27x00_charger_ovp(struct work_struct *work)
 {
@@ -1184,14 +960,8 @@ static void bq27x00_charger_ovp(struct work_struct *work)
 		container_of(work, struct bq27x00_device_info, ovp_work.work);
 
 	di->usb_ovp = bq24192_get_usbin_health();
-#ifdef SUPPORT_QPNP_VBUS_OVP
-	di->vbus_ovp = qpnp_check_vbus_ovp(&vusb_uv);
-	printk("%s usb_health =%d,check_cnt=%d,vbus=%d,vbus_ovp=%d.\n",__func__,di->usb_ovp,ovp_check_cnt,vusb_uv,di->vbus_ovp);
-	if((di->usb_ovp == USBIN_OVP) || (di->usb_ovp == USBIN_UNKNOW) || di->vbus_ovp){
-#else
 	DBG("%s usb_health = %d,check_cnt=%d.\n",__func__,di->usb_ovp,ovp_check_cnt);
 	if(di->usb_ovp == USBIN_OVP){
-#endif
 		bq27530_enable_charging(di,false);
 	} else if(di->usb_ovp == USBIN_OK){
 		bq27530_enable_charging(di,true);
@@ -1201,39 +971,25 @@ static void bq27x00_charger_ovp(struct work_struct *work)
 
 	if(ovp_check_cnt < 10){
 		schedule_delayed_work(&di->ovp_work, msecs_to_jiffies(500));
-#ifdef SUPPORT_QPNP_VBUS_OVP
-	} else {
-		if (di->usb_ovp)
-			schedule_delayed_work(&di->vbus_work, msecs_to_jiffies(500));
-		else
-			cancel_delayed_work(&di->vbus_work);
-#endif
 	}
 	return;
 }
 
 static void bq27x00_battery_poll(struct work_struct *work)
 {
-	int vbus_state;
-#if 0
-	int ret;
-#endif
+	int vbus_state,ret;
 	struct bq27x00_device_info *di =
 		container_of(work, struct bq27x00_device_info, work.work);
 
-	dev_info(di->dev, "fg event worker\n");
+	pr_debug("fg event worker\n");
 
-	di->usb_ovp = bq24192_get_usbin_health();
-	if (di->usb_ovp == USBIN_OK) {
-		vbus_state = bq24192_get_vbus_state(di);
-		if(!vbus_state || di->cache.voltage < 3500){
-			bq27530_enable_charging(di,true);
-		}
+	vbus_state = bq24192_get_vbus_state(di);
+	if(!vbus_state || di->cache.voltage < 3500){
+		bq27530_enable_charging(di,true);
 	}
 		
 	bq27x00_update(di);
 
-#if 0
 	if(di->cache.voltage < 4050){
 		if((di->cache.temperature-2731) > 0 && (di->cache.temperature-2731) < 100){
 			ret = bq27531_data_flash_write(di,0x4a,6,20);//T0
@@ -1255,31 +1011,18 @@ static void bq27x00_battery_poll(struct work_struct *work)
 				pr_err("%s:write err ret=%d.\n",__func__,ret);
 		}
 	}
-#endif
 
-	dev_info(di->dev, "%s:chg_en=%d,chg-type=%d,mains_online=%d,usb_online=%d,usb_ovp=%d,chg_st=%d.\n",
+	pr_debug("%s:chg_en=%d,chg-type=%d,mains_online=%d,usb_online=%d,usb_ovp=%d,chg_st=%d.\n",
 		__func__,di->board->chg_en_flag,di->chrg_type,di->mains_online,di->usb_online,di->usb_ovp,di->chg_state);
 	if(di->mains_online || di->usb_online || (di->usb_ovp == USBIN_OVP)){//usb present
-		if (!wake_lock_active(&di->wakelock)) {
-			printk("%s: add wake lock in main or usb online\n", __func__);
-			wake_lock(&di->wakelock);
-		}
-#ifdef CONFIG_FB
-		if (fb_status == FB_BLANK_UNBLANK)
-			bq27531_config_charging_current(di, 0);
-		else if (fb_status == FB_BLANK_POWERDOWN)
-			bq27531_config_charging_current(di, 1);
-		schedule_delayed_work(&di->work, msecs_to_jiffies(20000));//20s
-#else
 		schedule_delayed_work(&di->work, msecs_to_jiffies(delay_t));//30s
-#endif
 	}else{
 		if(wake_lock_active(&di->wakelock))
 			wake_unlock(&di->wakelock);
 		if((di->cache.temperature-2731)>580)
 			schedule_delayed_work(&di->work, msecs_to_jiffies(delay_t/3));//10s
 		else
-			schedule_delayed_work(&di->work, msecs_to_jiffies(delay_t));//30s
+			schedule_delayed_work(&di->work, msecs_to_jiffies(2*delay_t));//60s
 	}
 }
 
@@ -1294,14 +1037,10 @@ static int bq27x00_battery_temperature(struct bq27x00_device_info *di,
 	if (di->cache.temperature < 0)
 		return di->cache.temperature;
 
-#if 0
-	if(((di->cache.temperature <= (2381 - BQ_BATT_TEMP_OFFSET)) && (force_check_thermal != 1)))
+        if(di->cache.temperature <= 2331)
             val->intval = 255;
         else
             val->intval = di->cache.temperature - 2731;
-#else
-            val->intval = di->cache.temperature - 2731;
-#endif
 
 	return 0;
 }
@@ -1324,28 +1063,29 @@ static int bq27x00_battery_current(struct bq27x00_device_info *di,
 static int bq27x00_battery_health(struct bq27x00_device_info *di,
 		union power_supply_propval *val)
 {
-	int ret;
-
+//	int ret;
 	if (di->cache.temperature < 0){
 		dev_err(di->dev, "battery pack temp read fail\n");
 		return val->intval = POWER_SUPPLY_HEALTH_UNSPEC_FAILURE;
 	}
 	if((di->cache.temperature - 2731) > BATT_TEMP_MAX){
-		dev_err(di->dev, "battery temp over head:%d\n",
+		dev_err(di->dev, "battery pack temp read fail:%d\n",
 					di->cache.temperature - 2731);
 		return val->intval = POWER_SUPPLY_HEALTH_OVERHEAT;
 	}
+/*
 	ret = bq27x00_read(di, BQ27x00_REG_VOLT, false);
 	if(ret < 0){
 		dev_err(di->dev, "battery pack voltage read fail\n");
 		return val->intval = POWER_SUPPLY_HEALTH_UNSPEC_FAILURE;
 	}
-	if(ret > BATT_VOLT_MAX){
-		dev_err(di->dev, "Battery Over Voltage condition Detected:%d\n",ret);
+	*/
+	if(di->cache.voltage > BATT_VOLT_MAX){
+		dev_err(di->dev, "Battery Over Voltage condition Detected\n");
 		return val->intval = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
 	}
-	if(ret < BATT_VOLT_MIN){
-		dev_err(di->dev, "Low Battery condition Detected:%d\n",ret);
+	if(di->cache.voltage < BATT_VOLT_MIN){
+		dev_err(di->dev, "Low Battery condition Detected\n");
 		return val->intval = POWER_SUPPLY_HEALTH_DEAD;
 	}
 	return val->intval = POWER_SUPPLY_HEALTH_GOOD;
@@ -1366,21 +1106,6 @@ static int bq27x00_battery_status(struct bq27x00_device_info *di,
 	DBG("%s:usb=%d,mains=%d,chg_t=%d.\n",__func__,di->usb_online,di->mains_online,di->chrg_type);
 	/*when battery capacity fall to 99,recharging begin*/
 	if(di->usb_online || di->mains_online){
-#ifdef SUPPORT_QPNP_VBUS_OVP
-		if (di->vbus_ovp)
-			//val->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
-			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
-		else {
-			if(last_report_soc == 100)
-				val->intval = POWER_SUPPLY_STATUS_FULL;
-			else
-				val->intval = POWER_SUPPLY_STATUS_CHARGING;
-		}
-	} else {
-		/*when usb is otg mode or usb is plug off*/
-		val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
-	}
-#else
 		if(last_report_soc == 100)
 			val->intval = POWER_SUPPLY_STATUS_FULL;
 		else
@@ -1389,14 +1114,13 @@ static int bq27x00_battery_status(struct bq27x00_device_info *di,
 		/*when usb is otg mode or usb is plug off*/
 			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
 		}
-#endif
+
 	batt_temp = di->cache.temperature - 2731;
-	//if(batt_temp <=0 || batt_temp >=500){
-	//	pr_err("discharging:temperatur abnormal or on_init, batt_temp=%d\n", batt_temp);
-	//	val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
-	//}else if(batt_temp <= 20 || batt_temp >= 480){
-	if(batt_temp <= 20 || batt_temp >= 480){
-		//msleep(3000);
+	if(batt_temp <=0 || batt_temp >=500){
+		pr_err("discharging:temperatur abnormal or on_init.\n");
+		val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
+	}else if(batt_temp <= 20 || batt_temp >= 480){
+		msleep(3000);
 		ret = bq27x00_read(di, BQ24192_REG8_STATUS, true);
 		printk("reg8_status=0x%x.\n",ret);
 		if((ret >> 4 & 0x3) == 0x0){
@@ -1435,10 +1159,10 @@ static irqreturn_t charge_irq(int irq, void *devid)
 	int chrg_fault = 0;
 	int chrg_status = 0;
 	struct bq27x00_device_info *di = (struct bq27x00_device_info *)devid;
-	dev_info(di->dev, "CHARGER ISR\n");
+	pr_debug("CHARGER ISR\n");
 	chrg_fault = bq27x00_read(di, BQ24192_REG9_FAULT,true);
 	chrg_status = bq27x00_read(di, BQ24192_REG8_STATUS, true);
-	dev_info(di->dev,"Chrg fault=0x%x,status=0x%x.\n",chrg_fault,chrg_status);
+	pr_debug("Chrg fault=0x%x,status=0x%x.\n",chrg_fault,chrg_status);
 	if (!wake_lock_active(&di->wakelock))
 		wake_lock(&di->wakelock);
 	__cancel_delayed_work(&di->work);
@@ -1446,10 +1170,6 @@ static irqreturn_t charge_irq(int irq, void *devid)
 	ovp_check_cnt = 0;
 	__cancel_delayed_work(&di->ovp_work);
 	schedule_delayed_work(&di->ovp_work, msecs_to_jiffies(500));//500ms
-#ifdef SUPPORT_QPNP_VBUS_OVP
-	__cancel_delayed_work(&di->vbus_work);
-	schedule_delayed_work(&di->vbus_work, msecs_to_jiffies(500));//500ms
-#endif
 	return IRQ_HANDLED;
 }
 
@@ -1461,7 +1181,7 @@ static irqreturn_t fg_irq(int irq, void *devid)
 static irqreturn_t fg_thread_handler(int irq, void *devid)
 {
 	struct bq27x00_device_info *di = (struct bq27x00_device_info *)devid;
-	dev_info(di->dev, "FG ISR\n");
+	pr_debug("FG ISR\n");
 	if (!wake_lock_active(&di->wakelock))
 		wake_lock(&di->wakelock);
 	__cancel_delayed_work(&di->work);
@@ -1526,13 +1246,8 @@ static int bq27x00_battery_get_property(struct power_supply *psy,
 		enum power_supply_property psp,
 		union power_supply_propval *val)
 {
-	int ret = 0, batt_present;
+	int ret = 0;
 	struct bq27x00_device_info *di = to_bq27x00_device_info(psy);
-
-	if (di->is_suspend) {
-		printk("%s: suspend = %d\n", __func__, di->is_suspend);
-		return -ENODEV;
-	}
 
 	if (psp != POWER_SUPPLY_PROP_PRESENT && di->cache.flags < 0)
 		return -ENODEV;
@@ -1550,33 +1265,16 @@ static int bq27x00_battery_get_property(struct power_supply *psy,
 		case POWER_SUPPLY_PROP_PRESENT:
 			ret = bq27x00_read(di, BQ27x00_REG_FLAGS, false);
 			val->intval = (ret & BQ27500_FLAG_BAT_DET)>0 ? 1:0;
-			if (!val->intval)
-				printk("%s:battery is not present. ret=0x%x\n",__func__, ret);
 			break;
 		case POWER_SUPPLY_PROP_CURRENT_NOW:
 			ret = bq27x00_battery_current(di, val);
 			break;
 		case POWER_SUPPLY_PROP_CAPACITY:
-			if(((di->cache.temperature <= (2381 - BQ_BATT_TEMP_OFFSET)) && (force_check_thermal != 1)) || di->is_rom_mode || !di->fw_dw_done || di->soc_reset)
-				val->intval = 50;
-			else{
-				ret = bq27x00_read(di, BQ27x00_REG_FLAGS, false);
-				batt_present = (ret & BQ27500_FLAG_BAT_DET)>0 ? 1:0;
-				if(!batt_present){//battery is not present
-					printk("%s:2battery is not present. check_count=%d, ret=0x%x\n",
-							__func__, di->present_check_count, ret);
-					if (di->present_check_count > 5)
-						val->intval = 0;
-					else {
-						calculate_report_soc(di);
-						ret = bq27x00_simple_value(di->cache.capacity, val);
-						di->present_check_count++;
-					}
-				}else{
-					calculate_report_soc(di);
-					ret = bq27x00_simple_value(di->cache.capacity, val);
-					di->present_check_count = 0;
-				}
+            if(di->cache.temperature <= 2331)
+                val->intval = 50;
+            else{
+				calculate_report_soc(di);
+				ret = bq27x00_simple_value(di->cache.capacity, val);
 			}
 			break;
 		case POWER_SUPPLY_PROP_TEMP:
@@ -1632,7 +1330,7 @@ int df_ver_get(struct bq27x00_device_info *di)
 
 	mdelay(50);
 	ret = bq27x00_read(di,BQ27530_REG_CNTL, false);
-	//printk("%s: DF ver ret is 0x%x\n",__func__,ret);
+	printk("%s: DF ver ret is 0x%x\n",__func__,ret);
 
 	return ret;
 }
@@ -1737,16 +1435,6 @@ static int bq24912_usb_get_property(struct power_supply *psy,
 	return EINVAL;
 }
 
-static void bq27x00_boot_work(struct work_struct *work)
-{
-	if (force_check_thermal == -1)
-		force_check_thermal = 1;
-	boot_done = 1;
-
-	printk("%s: boot_done=%d, force_check_thermal=%d\n", __func__, boot_done, force_check_thermal);
-	return;
-}
-
 static int bq27x00_powersupply_init(struct bq27x00_device_info *di)
 {
 	int ret;
@@ -1759,10 +1447,6 @@ static int bq27x00_powersupply_init(struct bq27x00_device_info *di)
 
 	INIT_DELAYED_WORK(&di->work, bq27x00_battery_poll);
 	INIT_DELAYED_WORK(&di->ovp_work, bq27x00_charger_ovp);
-#ifdef SUPPORT_QPNP_VBUS_OVP
-	INIT_DELAYED_WORK(&di->vbus_work, bq27x00_charger_vbus_check);
-#endif
-	INIT_DELAYED_WORK(&di->boot_work, bq27x00_boot_work);
 	mutex_init(&di->lock);
 	wake_lock_init(&di->wakelock, WAKE_LOCK_SUSPEND,
 						"ctp_charger_wakelock");
@@ -1785,7 +1469,7 @@ static int bq27x00_powersupply_init(struct bq27x00_device_info *di)
 		dev_err(di->dev, "failed to register mains: %d\n", ret);
 		return ret;
 	}
-	di->usb.name = "usb_bq24912";
+	di->usb.name = "usb_qpnp";
 	di->usb.type = POWER_SUPPLY_TYPE_USB;
 	di->usb.properties = bq24912_usb_props;
 	di->usb.num_properties = ARRAY_SIZE(bq24912_usb_props);
@@ -1841,10 +1525,8 @@ static u32 bq27530_read_i2c_4byte(struct bq27x00_device_info *di, u8 reg,int num
 	msg[1].len = num;
 
 	ret = i2c_transfer(client->adapter, msg, ARRAY_SIZE(msg));
-	if (ret < 0) {
-		printk("%s: reg:0x%x, err:0x%x.\n", __func__, reg, ret);
+	if (ret < 0)
 		return ret;
-	}
 	ret = get_unaligned_le32(data);
 
 	return ret;
@@ -1870,33 +1552,17 @@ int firmware_write(struct bq27x00_device_info *di)
 		firmware_data = bq24192_firmware_data;
 		bqfs_size = sizeof(bq24192_bqfs_index)/sizeof(*bq);
 	} else if(di->chg_pn == BQ24292I_IC_VERSION){
-		if(di->battery_vendor_index == BATT_VENDOR_ATL_AND_DUMY) {
-			dev_info(di->dev, "FG update fw to 0x%x\n", BATT_FW_VER_ATL);
-			bqfs_index = bq24292i_bqfs_index_atl;
-			firmware_data = bq24292i_firmware_data_atl;
-			bqfs_size = sizeof(bq24292i_bqfs_index_atl)/sizeof(*bq);
-		}else{
-			dev_info(di->dev, "FG update fw to 0x%x\n", BATT_FW_VER_LG);
-			bqfs_index = bq24292i_bqfs_index_lg;
-			firmware_data = bq24292i_firmware_data_lg;
-			bqfs_size = sizeof(bq24292i_bqfs_index_lg)/sizeof(*bq);
-		}
+		bqfs_index = bq24292i_bqfs_index;
+		firmware_data = bq24292i_firmware_data;
+		bqfs_size = sizeof(bq24292i_bqfs_index)/sizeof(*bq);
 	}else{
+		bqfs_index = bq24292i_bqfs_index;
+		firmware_data = bq24292i_firmware_data;
+		bqfs_size = sizeof(bq24292i_bqfs_index)/sizeof(*bq);
 		pr_err("%s:chg_pn %d,use default.\n",__func__,di->chg_pn);
-		if(di->battery_vendor_index == BATT_VENDOR_ATL_AND_DUMY) {
-			dev_info(di->dev, "FG update fw to 0x%x\n", BATT_FW_VER_ATL);
-			bqfs_index = bq24292i_bqfs_index_atl;
-			firmware_data = bq24292i_firmware_data_atl;
-			bqfs_size = sizeof(bq24292i_bqfs_index_atl)/sizeof(*bq);
-		}else{
-			dev_info(di->dev, "FG update fw to 0x%x\n", BATT_FW_VER_LG);
-			bqfs_index = bq24292i_bqfs_index_lg;
-			firmware_data = bq24292i_firmware_data_lg;
-			bqfs_size = sizeof(bq24292i_bqfs_index_lg)/sizeof(*bq);
-		}
 	}
 	
-	dev_info(di->dev, "bq27530 %s:chg_pn %d,bqfs_size=%d\n", __func__,di->chg_pn,bqfs_size);
+	pr_debug("bq27530 %s:chg_pn %d,bqfs_size=%d\n", __func__,di->chg_pn,bqfs_size);
 
 	for(retry=0;retry<3;retry++){
 		data[0]=0x00;
@@ -1907,8 +1573,6 @@ int firmware_write(struct bq27x00_device_info *di)
 			return -1;
 		}else{
 			printk("%s: reg 0x00 enter rom mode whitout com error\n",__func__);
-			di->is_rom_mode = 1;
-			di->fw_dw_done = 0;
 		}
 		mdelay(1000);
 		fw_update_err = 0;
@@ -1961,7 +1625,6 @@ int firmware_write(struct bq27x00_device_info *di)
 	}
 	data[0]=0x41;
 	data[1]=0x00;
-	di->is_rom_mode = 0;
 	ret=bq27x00_write_i2c(di,BQ27530_REG_CNTL,2,data,0);/*Reset*/
 	if(ret <0){
 		pr_err("%s: reset cmd write error\n",__func__);
@@ -1972,7 +1635,6 @@ int firmware_write(struct bq27x00_device_info *di)
   	mdelay(1000);
   	di->chg_pn = chrg_get_vendor(di); 
 	pr_err("%s:df_ver=0x%x,chg_pn=0x%x. done \n",__func__,di->df_ver, di->chg_pn);
-	di->fw_dw_done = 1;
 
 	return 0;
 
@@ -1988,18 +1650,12 @@ int otg_func_set(bool votg_on)
         return -ENODEV;
 	}
     pr_err("%s: run parameters %d\n", __func__, votg_on);
-
-	__cancel_delayed_work(&bqdi->ovp_work);
-#ifdef SUPPORT_QPNP_VBUS_OVP
-	__cancel_delayed_work(&bqdi->vbus_work);
-#endif
+	
 	if(bqdi->board->chg_otg_gpio < 0){
 		pr_err("chg otg gpio is unvalid.\n");
     	return -ENODEV;
 	}
 
-	bq27531_charge_hiz_reset();
-	
 	if(votg_on){
 		data[0]=0x15;
 		data[1]=0x00;
@@ -2022,162 +1678,30 @@ int otg_func_set(bool votg_on)
 		gpio_direction_input(bqdi->board->chg_otg_gpio);
 		mdelay(220);
 	}
-    pr_err("%s: run parameters exit\n", __func__);
-	return 0;
+	return 1;
 }
 
-
-static int bq27531_soc_reset(void)
-{
-	int ret;
-	unsigned char data[32]={0};
-
-	if (!bqdi) {
-		printk("%s: bqdi is NULL, return \n",__func__);
-		return -1;
-	}
-
-	bqdi->soc_reset = 1;
-	data[0]=0x41;
-	data[1]=0x00;
-	ret=bq27x00_write_i2c(bqdi,BQ27530_REG_CNTL,2,data,0);/*Reset*/
-	if(ret <0){
-		pr_err("%s: reset cmd write error\n",__func__);
-		return -1;
-	}
-
-	bqdi->df_ver = df_ver_get(bqdi);
-	mdelay(1000);
-	mdelay(1000);
-	mdelay(1000);
-	bqdi->chg_pn = chrg_get_vendor(bqdi);
-	pr_err("%s:df_ver=0x%x,chg_pn=0x%x. done \n",__func__,bqdi->df_ver, bqdi->chg_pn);
-	bqdi->soc_reset = 0;
-
-	return 0;
-}
-
-static int bq27531_charge_ic_reset(void)
-{
-	int ret, i;
-	u8 data;
-
-	if (!bqdi) {
-		printk("%s: bqdi is NULL, return \n",__func__);
-		return -1;
-	}
-
-        for(i=0;i<5;i++){
-            ret = bq27x00_read_i2c(bqdi, BQ24192_REG_CTL_0, 1);
-            if(ret > 0)
-                break;
-        }
-        printk("%s: read hiz_reg=0x%x,i=%d.\n",__func__,ret,i);
-        if(ret < 0){
-            pr_err("bq27530 read charger reg00 err.\n");
-        }else{
-            data = ret & 0xff;
-            data &= ~BQ24192_0_HIZ;
-            for(i=0;i<5;i++){
-                ret = bq27x00_write_i2c(bqdi,BQ24192_REG_CTL_0,1,&data,0);
-                if(ret>0)
-                    break;
-            }
-            printk("%s: write hiz_reg=0x%x,ret=%d,i=%d.\n",__func__,data,ret,i);
-            if(ret <0)
-                pr_err("%s: HIZ mode write error\n",__func__);
-        }
-
-	ret = bq27531_op_thermal_mitigation(bqdi, 0);
-        if(ret)
-                pr_err("%s: set charging CE failed %d\n", __func__, ret);
-
-	ret = bq27531_op_set_input_limit(bqdi, IINLIM_2000);
-        if(ret)
-                pr_err("%s: set charging input power limit failed %d\n", __func__, ret);
-
-	return ret;
-}
-
-static int bq27531_charge_hiz_reset(void)
-{
-	int ret, i;
-	u8 data;
-
-return 0;
-	if (!bqdi) {
-		printk("%s: bqdi is NULL, return \n",__func__);
-		return -1;
-	}
-
-        for(i=0;i<5;i++){
-            ret = bq27x00_read_i2c(bqdi, BQ24192_REG_CTL_0, 1);
-            if(ret > 0)
-                break;
-        }
-        printk("%s: read hiz_reg=0x%x,i=%d.\n",__func__,ret,i);
-        if(ret < 0){
-            pr_err("bq27530 read charger reg00 err.\n");
-        }else{
-            data = ret & 0xff;
-            data &= ~BQ24192_0_HIZ;
-            for(i=0;i<5;i++){
-                ret = bq27x00_write_i2c(bqdi,BQ24192_REG_CTL_0,1,&data,0);
-                if(ret>0)
-                    break;
-            }
-            printk("%s: write hiz_reg=0x%x,ret=%d,i=%d.\n",__func__,data,ret,i);
-            if(ret <0)
-                pr_err("%s: HIZ mode write error\n",__func__);
-        }
-
-	return ret;
-}
-
-static int fg_reboot_done = 0;
 static int fg_reboot_notifier_call(struct notifier_block *notifier,
 				     unsigned long what, void *data)
 {
-	printk("%s\n", __func__);
-
-	if(!bqdi) {
-		printk("%s: bqdi is NULL, return\n", __func__);
+	if(bqdi < 0)
 		return NOTIFY_DONE;
-	}
-
-	if(fg_reboot_done) {
-		printk("%s: fg reboot had done, return\n", __func__);
-		return NOTIFY_DONE;
-	}
-
-	fg_reboot_done = 1;
-	bq27531_charge_ic_reset();
 
 	disable_irq(bqdi->chrg_irq_n);
 	disable_irq(bqdi->fg_irq_n);
 	cancel_delayed_work_sync(&bqdi->work);
-	//bq27530_enable_charging(bqdi,true);
+	bq27530_enable_charging(bqdi,true);
 	otg_func_set(0);
 	if(bqdi->chrg_irq_n)
 		free_irq(bqdi->chrg_irq_n, bqdi);
 	if(bqdi->fg_irq_n)
 		free_irq(bqdi->fg_irq_n, bqdi);
 
-	dev_info(bqdi->dev, "%s: The delay work and ISR was released for FG\n",__func__);
+	pr_debug("%s: The delay work and ISR was released for FG\n",__func__);
 
 	return NOTIFY_DONE;
 
 }
-
-#ifdef QPNP_KPDPWR_BARK_NOTIFIER
-static int fg_bark_notifier_call(struct notifier_block *notifier,
-					unsigned long what, void *data)
-{
-	printk("%s\n", __func__);
-
-	return NOTIFY_DONE;
-}
-#endif
 
 static int uart_switch_write(const char *val, struct kernel_param *kp)
 {
@@ -2236,7 +1760,7 @@ static ssize_t bc_fw_write(struct device *dev,
 		dev_err(bqdi->dev, "Error!Only write 1 to download: %d\n", bc_fw);
 	}
 
-	return count;
+	return ret;
 }
 
 ssize_t  chrg_ver_get(struct device *dev, struct device_attribute *attr,
@@ -2274,98 +1798,13 @@ ssize_t  fg_ver_get(struct device *dev, struct device_attribute *attr,
     return ret;
 }
 
-ssize_t  fg_info_get(struct device *dev, struct device_attribute *attr,
-			char *buf)
-{
-    int ret;
-    int max_capa;
-
-    if (!bqdi) {
-	printk("%s: bqdi is NULL, return \n",__func__);
-	return -1;
-    }
-
-    max_capa = bq27x00_read(bqdi, 0x62, false);
-    ret = sprintf(buf, "%4X,%X,%d,%d,%d,%d,%d\n",
-			0xD006,
-			df_ver_get(bqdi),
-			gpio_get_value(bqdi->board->chg_psel_gpio),
-			bqdi->vbus_ovp,
-			bqdi->chrg_type,
-			bqdi->battery_vendor_index,
-			max_capa);
-
-    return ret;
-}
-
-ssize_t thermal_mitigation_get(struct device *dev, struct device_attribute *attr,
-			char *buf)
-{
-    int ret;
-    struct bq27x00_device_info *di = dev_get_drvdata(dev);
-
-    ret = sprintf(buf, "%d\n", di->thermal_mitigation);
-
-    return ret;
-}
-
-static ssize_t thermal_mitigation_set(struct device *dev,
-	struct device_attribute *attr, const char *buf, size_t count)
-{
-        struct bq27x00_device_info *di = dev_get_drvdata(dev);
-	int cmd;
-
-	sscanf(buf, "%d", &cmd);
-	di->thermal_mitigation = !!cmd;
-	bq27531_op_thermal_mitigation(di, di->thermal_mitigation);
-	printk("%s: %d\n", __func__, di->thermal_mitigation);
-
-	return count;
-}
-
-ssize_t force_check_thermal_get(struct device *dev, struct device_attribute *attr,
-			char *buf)
-{
-    int ret;
-
-    ret = sprintf(buf, "%d\n", force_check_thermal);
-
-    return ret;
-}
-
-static ssize_t force_check_thermal_set(struct device *dev,
-	struct device_attribute *attr, const char *buf, size_t count)
-{
-	int cmd;
-
-	sscanf(buf, "%d", &cmd);
-	if (cmd == 1) {
-		force_check_thermal = cmd;
-	} else if (cmd == 0) {
-		if (boot_done)
-			printk("%s: cannot disable thermal check after boot done\n", __func__);
-		else
-			force_check_thermal = cmd;
-	} else
-		printk("%s: invalid value %d\n", __func__, cmd);
-
-	printk("%s: %d\n", __func__, force_check_thermal);
-	return count;
-}
-
 static DEVICE_ATTR(fw_write, S_IRUGO|S_IWUSR, NULL,bc_fw_write);
 static DEVICE_ATTR(chrg_version, S_IRUGO|S_IWUSR, chrg_ver_get,NULL);
 static DEVICE_ATTR(fg_version, S_IRUGO|S_IWUSR, fg_ver_get,NULL);
-static DEVICE_ATTR(fg_info, S_IRUGO|S_IWUSR, fg_info_get,NULL);
-static DEVICE_ATTR(thermal_mitigation, S_IRUGO|S_IWUSR, thermal_mitigation_get, thermal_mitigation_set);
-static DEVICE_ATTR(force_check_thermal, S_IRUGO|S_IWUSR, force_check_thermal_get, force_check_thermal_set);
 static struct attribute *fs_attrs[] = {
 	&dev_attr_fw_write.attr,
 	&dev_attr_chrg_version.attr,
 	&dev_attr_fg_version.attr,
-	&dev_attr_fg_info.attr,
-	&dev_attr_thermal_mitigation.attr,
-	&dev_attr_force_check_thermal.attr,
 	NULL,
 };
 
@@ -2399,6 +1838,7 @@ module_param_call(ic_reg,bc_reg_show,NULL,&ic_reg,0644);
 MODULE_PARM_DESC(ic_reg, "Download FW in FG and Charger");
 
 static unsigned int fw_version = 0;
+static unsigned int read_only = 0;
 static int fw_reg_show(const char *val, struct kernel_param *kp)
 {
 
@@ -2417,13 +1857,11 @@ MODULE_PARM_DESC(fw_version, "Download FW in FG and Charger");
 #define DATA_FLASH_CLASS_REG_SUBCLS 0x3E
 #define DATA_FLASH_CLASS_REG_OFFSET 0x3F
 #define mod(n, div) ((n) % (div))
-#ifdef BQ_WRITE_TEMP
 static int bq27531_data_flash_write(struct bq27x00_device_info *di,unsigned char sub_class,
 				unsigned char offset,unsigned char new_value)
 {
 	unsigned char old_reg_value,new_reg_value,old_check_sum,new_check_sum;
 	unsigned char data,sub_class_id,data_offset,reg_addr;
-	int ret;
 	/*unsigned char data_rst[2] = {0};*/
 
 	if(di == NULL){
@@ -2472,7 +1910,6 @@ static int bq27531_data_flash_write(struct bq27x00_device_info *di,unsigned char
 
 	return 0;
 }
-#endif
 static int bq27530_parse_dt(struct device *dev,
                 struct bq27530_platform_data *bq27530_pdata)
 {
@@ -2553,14 +1990,6 @@ static int bq27x00_battery_probe(struct i2c_client *client,
 	di->bus.read = &bq27x00_read_i2c;
   	di->board = platform_data;
   	di->board->chg_current = CURRENT_UNDEFINE;
-
-	di->is_suspend = 0;
-	di->is_rom_mode = 0;
-	di->fw_dw_done = 1;
-	di->soc_reset = 0;
-	di->reset_p = 0;
-	di->present_check_count = 0;
-	di->thermal_mitigation = 0;
 
 	i2c_set_clientdata(client, di);
 
@@ -2661,17 +2090,12 @@ static int bq27x00_battery_probe(struct i2c_client *client,
         }
     }
 
-	schedule_delayed_work(&di->boot_work, msecs_to_jiffies(300000));//300s
-
 	mdelay(100);
 	bat_flag = bq27x00_read(di, BQ27x00_REG_FLAGS, false);
 	dev_info(di->dev, "0x0A REG ret = 0x%x\n",bat_flag);
 
 	di->df_ver = df_ver_get(di);
   	di->chg_pn = chrg_get_vendor(di); 
-	di->battery_vendor_index = (qpnp_batt_id < 1000000) ? BATT_VENDOR_LG : BATT_VENDOR_ATL_AND_DUMY;
-	printk("bq27530 Battery ID: %ld, Vendor: [ %d ]  %s\n", qpnp_batt_id, di->battery_vendor_index,
-				(di->battery_vendor_index == BATT_VENDOR_LG) ? "LG":"ATL or Dumy");
 
 	printk("bq27530 check firmware step1 chrg_pn=0x%x.\n",di->chg_pn);
 	if(di->df_ver < 0 || di->chg_pn < 0){
@@ -2685,10 +2109,9 @@ static int bq27x00_battery_probe(struct i2c_client *client,
 	}
 	di->df_ver = df_ver_get(di);
   	di->chg_pn = chrg_get_vendor(di); 
-	printk("bq27530 check firmware step2 df_ver=0x%x, chrg_pn=0x%x.\n",di->df_ver, di->chg_pn);
+	printk("bq27530 check firmware step2 chrg_pn=0x%x.\n",di->chg_pn);
 	if(di->chg_pn == BQ24292I_IC_VERSION){
-		if(((di->battery_vendor_index == BATT_VENDOR_ATL_AND_DUMY) && (di->df_ver != BATT_FW_VER_ATL))
-				|| ((di->battery_vendor_index == BATT_VENDOR_LG) && (di->df_ver != BATT_FW_VER_LG))){
+		if(di->df_ver != 0x208){
 			retval = firmware_write(di);
 			if (!retval){
 				dev_info(di->dev, "FG FW update step2 complete\n");
@@ -2698,7 +2121,7 @@ static int bq27x00_battery_probe(struct i2c_client *client,
 			}
 		}
 	}else if(di->chg_pn == BQ24192_IC_VERSION){
-		if(di->df_ver != 0xAA01){
+		if(di->df_ver != 0x104){
 			retval = firmware_write(di);
 			if (!retval){
 				dev_info(di->dev, "FG FW update complete\n");
@@ -2717,14 +2140,8 @@ static int bq27x00_battery_probe(struct i2c_client *client,
 	}
 
 	bqdi = di;
-#ifdef CONFIG_FB
-	configure_fb_notifiler(di);
-#endif
   	bq27530_enable_charging(di, true);
 	schedule_delayed_work(&di->work, msecs_to_jiffies(delay_t/30));//30s
-#ifdef SUPPORT_QPNP_VBUS_OVP
-	schedule_delayed_work(&di->vbus_work, msecs_to_jiffies(1000));
-#endif
 
 	return 0;
 
@@ -2775,21 +2192,7 @@ static int bq27x00_battery_suspend(struct device *dev)
 	struct bq27x00_device_info *di = dev_get_drvdata(dev);
 
 	dev_info(di->dev, "Bq27531 suspend\n");
-	di->is_suspend = 1;
-	if (!boot_done) {
-		if (force_check_thermal == -1)
-			force_check_thermal = 1;
-		boot_done = 1;
-		printk("%s: boot_done=%d, force_check_thermal=%d\n", __func__, boot_done, force_check_thermal);
-	}
-
-	disable_irq(bqdi->chrg_irq_n);
-	disable_irq(bqdi->fg_irq_n);
-	cancel_delayed_work(&di->work);
-	cancel_delayed_work(&di->ovp_work);
-#ifdef SUPPORT_QPNP_VBUS_OVP
-	//cancel_delayed_work(&di->vbus_work);
-#endif
+	cancel_delayed_work_sync(&di->work);
 
 	return 0;
 
@@ -2798,148 +2201,11 @@ static int bq27x00_battery_resume(struct device *dev)
 {
 	struct bq27x00_device_info *di = dev_get_drvdata(dev);
 
-	dev_info(di->dev, "Bq27531 resume\n");
-#ifdef SUPPORT_QPNP_VBUS_OVP
-	//schedule_delayed_work(&di->vbus_work, 0);
-#endif
-	//schedule_delayed_work(&di->ovp_work, 0);
 	schedule_delayed_work(&di->work, 0);
-	enable_irq(bqdi->fg_irq_n);
-	enable_irq(bqdi->chrg_irq_n);
-	di->is_suspend = 0;
+	dev_info(di->dev, "Bq27531 resume\n");
 
 	return 0;
 }
-
-static int bq27531_op_write_reg(struct bq27x00_device_info *di, u8 addr, u8 value, u8 mask)
-{
-	int ret, i, old_data;
-	unsigned char data;
-
-        for (i=0; i<5; i++) {
-		ret = bq27x00_read_i2c(di, addr, 1);
-		if(ret > 0)
-			break;
-	}
-
-	if (ret < 0) {
-		printk("%s: read register 0x%x error, %d\n", __func__, addr, ret);
-		return ret;
-	}
-
-	old_data = ret;
-        data = (ret & mask) | value;
-
-        for (i=0; i<5; i++) {
-                ret = bq27x00_write_i2c(di, addr, 1, &data, 0);
-		if(ret > 0)
-                	break;
-        }
-        if (ret <0){
-		printk("%s: write register 0x%x error(%d), read data is 0x%x\n", __func__, addr, ret, old_data);
-		return ret;
-	} else
-       		printk("%s: write register 0x%x from 0x%x to 0x%x\n", __func__, addr, old_data, data);
-
-	return 0;
-}
-
-/* IINLIM */
-static int bq27531_op_set_input_limit(struct bq27x00_device_info *di, int value)
-{
-	printk("%s: %d\n", __func__, value);
-	return bq27531_op_write_reg(di, BQ24192_REG_CTL_0, value, 0xf8);
-}
-
-/* CHG_/CE */
-static int bq27531_op_thermal_mitigation(struct bq27x00_device_info *di, int level)
-{
-	int value = level;
-
-	if(di->board->chg_en_gpio <= 0){
-		printk("di->board->chg_en_gpio is <= 0.\n");
-		return -1;
-	}
-
-        printk("%s: bq27530 set CHG_/CE gpio %s .\n", __func__, !level ? "Enable":"Disabled");
-        gpio_set_value_cansleep(di->board->chg_en_gpio, value);
-
-	return 0;
-}
-
-static int bq27531_config_charging_current(struct bq27x00_device_info *di, int level)
-{
-	printk("%s: chrg_type=%d, level=%d, vbus_ovp=%d, call=%d\n",
-		__func__, di->chrg_type, level, di->vbus_ovp, g_call_status);
-
-	if (di->vbus_ovp == 1)
-		return 0;
-
-	switch(di->chrg_type) {
-        case POWER_SUPPLY_TYPE_USB_CDP:
-		bq27531_op_set_input_limit(di, IINLIM_1500);
-		break;
-        case POWER_SUPPLY_TYPE_USB_ACA:
-        case POWER_SUPPLY_TYPE_USB_DCP:
-        case POWER_SUPPLY_TYPE_UNKNOWN:
-		if((level && !g_call_status) || (!boot_done))
-			bq27531_op_set_input_limit(di, IINLIM_2000);
-		else {
-			if (g_call_status)
-				bq27531_op_set_input_limit(di, IINLIM_900);
-			else
-				bq27531_op_set_input_limit(di, IINLIM_1500);
-		}
-		break;
-        case POWER_SUPPLY_TYPE_USB:
-		bq27531_op_set_input_limit(di, IINLIM_500);
-		break;
-        case POWER_SUPPLY_TYPE_BATTERY:
-		break;
-	default:
-		printk("%s: defalt chg_type %d", __func__, di->chrg_type);
-		break;
-	}
-	
-	return 0;
-}
-
-#ifdef CONFIG_FB
-static int fb_notifier_callback(struct notifier_block *self,
-				unsigned long event, void *data)
-{
-	struct fb_event *evdata = data;
-	unsigned long *blank;
-	struct bq27x00_device_info *di =
-		container_of(self, struct bq27x00_device_info, fb_notif);
-
-	printk("%s: event is %ld\n", __func__, event);
-	if (evdata && evdata->data && event == FB_EVENT_BLANK) {
-		blank = evdata->data;
-		printk("%s: blank is %ld\n", __func__, *blank);
-		if (*blank == FB_BLANK_UNBLANK)
-			bq27531_config_charging_current(di, 0);
-		else if (*blank == FB_BLANK_POWERDOWN)
-			bq27531_config_charging_current(di, 1);
-		fb_status = *blank;
-	}
-
-	return 0;
-}
-
-static void configure_fb_notifiler(struct bq27x00_device_info *di)
-{
-	int retval = 0;
-
-	di->fb_notif.notifier_call = fb_notifier_callback;
-
-	retval = fb_register_client(&di->fb_notif);
-	if (retval)
-		dev_err(di->dev,
-			"Unable to register fb_notifier: %d\n", retval);
-	return;
-}
-#endif
 #else
 #define bq27x00_battery_suspend NULL
 #define bq27x00_battery_resume NULL
@@ -2952,12 +2218,6 @@ static const struct dev_pm_ops bq27x00_pm_ops = {
 static struct notifier_block fg_reboot_notifier = {
 	.notifier_call = fg_reboot_notifier_call,
 };
-
-#ifdef QPNP_KPDPWR_BARK_NOTIFIER
-static struct notifier_block fg_kpdpwr_bark_notifier = {
-	.notifier_call	= fg_bark_notifier_call,
-};
-#endif
 
 static const struct of_device_id bq27530_match[] = {
 	{ .compatible = "ti,bq27530-battery" },
@@ -3003,11 +2263,6 @@ static int __init bq27x00_battery_init(void)
 	if (register_reboot_notifier(&fg_reboot_notifier))
 		pr_warning("fg: unable to register reboot notifier");
 
-#ifdef QPNP_KPDPWR_BARK_NOTIFIER
-	ret = blocking_notifier_chain_register(&qpnp_kpdpwr_bark_list, &fg_kpdpwr_bark_notifier);
-	if (ret)
-		pr_err("Unable to register qpnp kpdpwr bark notifier: %d\n", ret);
-#endif
 	return ret;
 }
 module_init(bq27x00_battery_init);
@@ -3016,9 +2271,6 @@ static void __exit bq27x00_battery_exit(void)
 {
 	bq27x00_battery_i2c_exit();
 	unregister_reboot_notifier(&fg_reboot_notifier);
-#ifdef QPNP_KPDPWR_BARK_NOTIFIER
-	blocking_notifier_chain_register(&qpnp_kpdpwr_bark_list, &fg_kpdpwr_bark_notifier);
-#endif
 }
 module_exit(bq27x00_battery_exit);
 
