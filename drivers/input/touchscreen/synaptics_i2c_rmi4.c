@@ -6,6 +6,7 @@
  * Copyright (C) 2012 Alexandra Chin <alexandra.chin@tw.synaptics.com>
  * Copyright (C) 2012 Scott Lin <scott.lin@tw.synaptics.com>
  * Copyright (c) 2013, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2016, Michal Chvíla <electrydev@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,6 +32,7 @@
 #include <linux/of_gpio.h>
 #include "synaptics_i2c_rmi4.h"
 #include <linux/input/mt.h>
+#include <linux/time.h>
 
 #define DRIVER_NAME "synaptics_rmi4_i2c"
 #define INPUT_PHYS_NAME "synaptics_rmi4_i2c/input0"
@@ -106,6 +108,13 @@ enum device_status {
 
 static atomic_t device_count;
 
+static void synaptics_rmi4_waketouch_status(struct synaptics_rmi4_data *rmi4_data,
+		int status);
+
+#define WAKETOUCH_MAX_PX 200
+#define WAKETOUCH_MAX_MS 500
+#define WAKETOUCH_MIN_MS 50
+
 static int synaptics_rmi4_i2c_read(struct synaptics_rmi4_data *rmi4_data,
 		unsigned short addr, unsigned char *data,
 		unsigned short length);
@@ -125,6 +134,9 @@ static int synaptics_rmi4_check_configuration(struct synaptics_rmi4_data
 static int synaptics_rmi4_suspend(struct device *dev);
 
 static int synaptics_rmi4_resume(struct device *dev);
+
+
+static int synaptics_rmi4_power_on(struct synaptics_rmi4_data *rmi4_data, bool on);
 
 
 #ifdef CONFIG_PM
@@ -168,6 +180,12 @@ static ssize_t synaptics_rmi4_flipy_show(struct device *dev,
 		struct device_attribute *attr, char *buf);
 
 static ssize_t synaptics_rmi4_flipy_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count);
+
+static ssize_t synaptics_rmi4_waketouch_show(struct device *dev,
+		struct device_attribute *attr, char *buf);
+
+static ssize_t synaptics_rmi4_waketouch_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count);
 
 
@@ -421,6 +439,9 @@ static struct device_attribute attrs[] = {
 	__ATTR(flipy, (S_IRUGO | S_IWUSR | S_IWGRP),
 			synaptics_rmi4_flipy_show,
 			synaptics_rmi4_flipy_store),
+	__ATTR(gesture_on, S_IRUGO,
+			synaptics_rmi4_waketouch_show,
+			synaptics_rmi4_waketouch_store),
 };
 
 static bool exp_fn_inited;
@@ -688,6 +709,67 @@ static ssize_t synaptics_rmi4_flipy_store(struct device *dev,
 	return count;
 }
 
+static ssize_t synaptics_rmi4_waketouch_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%u\n",
+		rmi4_data->waketouch_flag);
+}
+
+static ssize_t synaptics_rmi4_waketouch_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	unsigned int input;
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
+	if (sscanf(buf, "%u", &input) != 1)
+		return -EINVAL;
+
+	if (input == 1) {
+		if (!rmi4_data->waketouch_flag) {
+			rmi4_data->waketouch_flag = true;
+			enable_irq_wake(rmi4_data->irq);
+			dev_err(dev, "%s: WakeTouch: Enabled, waketouch_flag=%d\n",
+				__func__, rmi4_data->waketouch_flag);
+		}
+	} else {
+		if (rmi4_data->waketouch_flag) {
+			rmi4_data->waketouch_flag = false;
+			disable_irq_wake(rmi4_data->irq);
+			dev_err(dev, "%s: WakeTouch: Disabled, waketouch_flag=%d\n",
+				__func__, rmi4_data->waketouch_flag);
+		}
+	}
+
+	return count;
+}
+
+static int synaptics_rmi4_power_reset(struct synaptics_rmi4_data *rmi4_data)
+{
+	int retval = 0;
+
+	retval = synaptics_rmi4_power_on(rmi4_data, false);
+	if (retval < 0) {
+		dev_err(&rmi4_data->i2c_client->dev, "Failed to power off\n");
+		retval = -EIO;
+		goto exit;
+	}
+	mdelay(100);
+
+	retval = synaptics_rmi4_power_on(rmi4_data, true);
+	if (retval < 0) {
+		dev_err(&rmi4_data->i2c_client->dev, "Failed to power on\n");
+		retval = -EIO;
+		goto exit;
+	}
+	mdelay(200);
+
+exit:
+	return retval;
+}
+
  /**
  * synaptics_rmi4_set_page()
  *
@@ -720,6 +802,15 @@ static int synaptics_rmi4_set_page(struct synaptics_rmi4_data *rmi4_data,
 				rmi4_data->current_page = page;
 				break;
 			}
+		}
+
+		if (retry == SYN_I2C_RETRY_TIMES && !rmi4_data->fw_updating) {
+			/* do power reset */
+			dev_err(&rmi4_data->i2c_client->dev,
+				"%s: I2C set page over retry limit, do power reset!\n",
+				__func__);
+
+			synaptics_rmi4_power_reset(rmi4_data);
 		}
 	} else
 		return PAGE_SELECT_LEN;
@@ -776,11 +867,13 @@ static int synaptics_rmi4_i2c_read(struct synaptics_rmi4_data *rmi4_data,
 		msleep(20);
 	}
 
-	if (retry == SYN_I2C_RETRY_TIMES) {
+	if (retry == SYN_I2C_RETRY_TIMES && !rmi4_data->fw_updating) {
+		/* do power reset */
 		dev_err(&rmi4_data->i2c_client->dev,
-				"%s: I2C read over retry limit\n",
-				__func__);
-		retval = -EIO;
+			"%s: I2C read over retry limit, do power reset!\n",
+			__func__);
+
+		synaptics_rmi4_power_reset(rmi4_data);
 	}
 
 exit:
@@ -834,11 +927,13 @@ static int synaptics_rmi4_i2c_write(struct synaptics_rmi4_data *rmi4_data,
 		msleep(20);
 	}
 
-	if (retry == SYN_I2C_RETRY_TIMES) {
+	if (retry == SYN_I2C_RETRY_TIMES && !rmi4_data->fw_updating) {
+		/* do power reset */
 		dev_err(&rmi4_data->i2c_client->dev,
-				"%s: I2C write over retry limit\n",
-				__func__);
-		retval = -EIO;
+			"%s: I2C write over retry limit, do power reset!\n",
+			__func__);
+
+		synaptics_rmi4_power_reset(rmi4_data);
 	}
 
 exit:
@@ -871,6 +966,89 @@ static void synaptics_rmi4_release_all(struct synaptics_rmi4_data *rmi4_data)
 			BTN_TOOL_FINGER, 0);
 
 	input_sync(rmi4_data->input_dev);
+}
+
+/**
+ * synaptics_rmi4_waketouch_f12_gesture()
+ *
+ * Called by synaptics_rmi4_f12_abs_report()
+ */
+static int synaptics_rmi4_waketouch_f12_gesture(struct synaptics_rmi4_data *rmi4_data,
+		struct synaptics_rmi4_f12_finger_data *data, unsigned char fingers_to_process)
+{
+	unsigned char touch_count = 0; /* number of touch points */
+	unsigned char finger;
+	unsigned char finger_status;
+
+	struct timeval tval;
+	unsigned long time_now;
+	unsigned long time_diff;
+
+	int x;
+	int y;
+	int touch_diff_x;
+	int touch_diff_y;
+
+	struct synaptics_rmi4_f12_finger_data *finger_data;
+
+	do_gettimeofday(&tval);
+	time_now = (tval.tv_sec * USEC_PER_SEC + tval.tv_usec) / 1000;
+	time_diff = time_now - rmi4_data->last_touch_ms;
+
+	for (finger = 0; finger < fingers_to_process; finger++) {
+		finger_data = data + finger;
+		finger_status = finger_data->object_type_and_status & MASK_2BIT;
+
+		if (finger_status == 1) {
+			touch_count++;
+
+			x = (finger_data->x_msb << 8) | (finger_data->x_lsb);
+			y = (finger_data->y_msb << 8) | (finger_data->y_lsb);
+
+			if (rmi4_data->flip_x)
+				x = rmi4_data->sensor_max_x - x;
+			if (rmi4_data->flip_y)
+				y = rmi4_data->sensor_max_y - y;
+
+			touch_diff_x = abs(rmi4_data->last_touch_x - x);
+			touch_diff_y = abs(rmi4_data->last_touch_y - y);
+
+			rmi4_data->last_touch_ms = time_now;
+			rmi4_data->last_touch_x = x;
+			rmi4_data->last_touch_y = y;
+
+			// time check
+			if (time_diff < WAKETOUCH_MIN_MS
+					|| time_diff > WAKETOUCH_MAX_MS) {
+				continue;
+			}
+
+			// pos check
+			if ((touch_diff_x > WAKETOUCH_MAX_PX)
+					|| (touch_diff_y > WAKETOUCH_MAX_PX)) {
+				dev_err(&rmi4_data->i2c_client->dev,
+					"F12: WakeTouch: Double tap touches are apart diff_x=%d diff_y=%d, ignoring!",
+					touch_diff_x, touch_diff_y);
+				continue;
+			}
+
+			// WAKE ->
+			dev_err(&rmi4_data->i2c_client->dev,
+				"F12: WakeTouch: Registered double tap finger=%d at x=%d,y=%d time_diff=%lu\n",
+				finger, x, y, time_diff);
+
+			input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 1);
+			input_sync(rmi4_data->input_dev);
+			input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 0);
+			input_sync(rmi4_data->input_dev);
+
+			synaptics_rmi4_waketouch_status(rmi4_data, STATUS_AWAKING);
+
+			return touch_count;
+		}
+	}
+
+	return touch_count; // 0
 }
 
  /**
@@ -923,6 +1101,10 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 			num_of_finger_status_regs);
 	if (retval < 0)
 		return 0;
+
+	if (rmi4_data->waketouch_flag && rmi4_data->waketouch_status != STATUS_AWAKE) {
+		return 0; // ignore f11
+	}
 
 	for (finger = 0; finger < fingers_supported; finger++) {
 		reg_index = finger / 4;
@@ -1055,6 +1237,11 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 
 	data = (struct synaptics_rmi4_f12_finger_data *)fhandler->data;
 
+	// Gestures (DT2W) :)
+	if (rmi4_data->waketouch_flag && rmi4_data->waketouch_status == STATUS_ASLEEP) {
+		return synaptics_rmi4_waketouch_f12_gesture(rmi4_data, data, fingers_to_process);
+	}
+
 	for (finger = 0; finger < fingers_to_process; finger++) {
 		finger_data = data + finger;
 		finger_status = finger_data->object_type_and_status & MASK_2BIT;
@@ -1167,6 +1354,10 @@ static void synaptics_rmi4_f1a_report(struct synaptics_rmi4_data *rmi4_data,
 				"%s: Failed to read button data registers\n",
 				__func__);
 		return;
+	}
+
+	if (rmi4_data->waketouch_flag && rmi4_data->waketouch_status != STATUS_AWAKE) {
+		return; // ignore f1a
 	}
 
 	data = f1a->button_data_buffer;
@@ -1817,6 +2008,10 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 	rmi4_data->max_touch_width = max(rmi4_data->num_of_rx,
 			rmi4_data->num_of_tx);
 
+	rmi4_data->last_touch_ms = 0;
+	rmi4_data->last_touch_x = 0;
+	rmi4_data->last_touch_y = 0;
+
 	fhandler->intr_reg_num = (intr_count + 7) / 8;
 	if (fhandler->intr_reg_num != 0)
 		fhandler->intr_reg_num -= 1;
@@ -2397,6 +2592,7 @@ static int synaptics_rmi4_reset_device(struct synaptics_rmi4_data *rmi4_data)
 	struct synaptics_rmi4_fn *fhandler;
 	struct synaptics_rmi4_fn *next_fhandler;
 	struct synaptics_rmi4_device_info *rmi;
+	unsigned char intr_status[MAX_INTR_REGISTERS];
 
 	rmi = &(rmi4_data->rmi4_mod_info);
 
@@ -2429,6 +2625,21 @@ static int synaptics_rmi4_reset_device(struct synaptics_rmi4_data *rmi4_data)
 				"%s: Failed to query device\n",
 				__func__);
 		return retval;
+	}
+
+	if (rmi4_data->waketouch_flag) {
+		/* Clear interrupts first */
+		retval = synaptics_rmi4_i2c_read(rmi4_data,
+				rmi4_data->f01_data_base_addr + 1,
+				intr_status,
+				rmi4_data->num_of_intr_regs);
+		if (retval < 0) {
+			dev_err(&rmi4_data->i2c_client->dev,
+				"%s: Failed to clear interrupts\n", __func__);
+			return retval;
+		}
+
+		synaptics_rmi4_waketouch_status(rmi4_data, STATUS_AWAKE);
 	}
 
 	return 0;
@@ -2912,6 +3123,10 @@ static int __devinit synaptics_rmi4_probe(struct i2c_client *client,
 	rmi4_data->fw_updating = false;
 	rmi4_data->suspended = false;
 
+	// WakeTouch
+	rmi4_data->waketouch_flag = true;
+	rmi4_data->waketouch_status = STATUS_AWAKE;
+
 	rmi4_data->i2c_read = synaptics_rmi4_i2c_read;
 	rmi4_data->i2c_write = synaptics_rmi4_i2c_write;
 	rmi4_data->irq_enable = synaptics_rmi4_irq_enable;
@@ -3037,6 +3252,9 @@ static int __devinit synaptics_rmi4_probe(struct i2c_client *client,
 		}
 	}
 
+	// WakeTouch
+	input_set_capability(rmi4_data->input_dev, EV_KEY, KEY_WAKEUP);
+
 	retval = input_register_device(rmi4_data->input_dev);
 	if (retval) {
 		dev_err(&client->dev,
@@ -3067,6 +3285,10 @@ static int __devinit synaptics_rmi4_probe(struct i2c_client *client,
 		synaptics_rmi4_irq, platform_data->irq_flags,
 		DRIVER_NAME, rmi4_data);
 	rmi4_data->irq_enabled = true;
+
+	// WakeTouch
+	if (rmi4_data->waketouch_flag)
+		enable_irq_wake(rmi4_data->irq);
 
 	if (retval < 0) {
 		dev_err(&client->dev,
@@ -3107,6 +3329,7 @@ static int __devinit synaptics_rmi4_probe(struct i2c_client *client,
 
 	synaptics_rmi4_sensor_wake(rmi4_data);
 
+	// CHECK ME !
 	retval = synaptics_rmi4_irq_enable(rmi4_data, true);
 	if (retval < 0) {
 		dev_err(&client->dev,
@@ -3274,6 +3497,40 @@ static int __devexit synaptics_rmi4_remove(struct i2c_client *client)
 	kfree(rmi4_data);
 
 	return 0;
+}
+
+static void synaptics_rmi4_waketouch_status(struct synaptics_rmi4_data *rmi4_data,
+		int status)
+{
+	if (!rmi4_data->waketouch_flag)
+		return;
+
+	switch(status) {
+		case STATUS_ASLEEP:
+			rmi4_data->waketouch_status = STATUS_ASLEEP;
+			dev_err(&(rmi4_data->input_dev->dev),
+				"%s: WakeTouch: Entering ASLEEP waketouch_status=%d\n",
+				__func__, rmi4_data->waketouch_status);
+			break;
+		case STATUS_AWAKE:
+			rmi4_data->waketouch_status = STATUS_AWAKE;
+			dev_err(&(rmi4_data->input_dev->dev),
+				"%s: WakeTouch: Entering AWAKE waketouch_status=%d\n",
+				__func__, rmi4_data->waketouch_status);
+			break;
+		case STATUS_AWAKING:
+			rmi4_data->waketouch_status = STATUS_AWAKING;
+			dev_err(&(rmi4_data->input_dev->dev),
+				"%s: WakeTouch: Entering AWAKING waketouch_status=%d\n",
+				__func__, rmi4_data->waketouch_status);
+			break;
+		default:
+			dev_err(&(rmi4_data->input_dev->dev),
+				"%s: WakeTouch: Invalid status! Current waketouch_status=%d\n",
+				__func__, rmi4_data->waketouch_status);
+	}
+
+	return;
 }
 
 #ifdef CONFIG_PM
@@ -3567,6 +3824,24 @@ static int synaptics_rmi4_suspend(struct device *dev)
 {
 	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 	int retval;
+	unsigned char intr_status[MAX_INTR_REGISTERS];
+
+	if (rmi4_data->waketouch_flag) {
+		/* Clear interrupts first */
+		retval = synaptics_rmi4_i2c_read(rmi4_data,
+				rmi4_data->f01_data_base_addr + 1,
+				intr_status,
+				rmi4_data->num_of_intr_regs);
+		if (retval < 0) {
+			dev_err(dev, "%s: Failed to clear interrupts\n", __func__);
+			return retval;
+		}
+
+		//synaptics_rmi4_release_all(rmi4_data);
+		synaptics_rmi4_waketouch_status(rmi4_data, STATUS_ASLEEP);
+
+		return 0;
+	}
 
 	if (rmi4_data->stay_awake) {
 		rmi4_data->staying_awake = true;
@@ -3626,6 +3901,26 @@ static int synaptics_rmi4_resume(struct device *dev)
 {
 	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 	int retval;
+	unsigned char intr_status[MAX_INTR_REGISTERS];
+
+	if (rmi4_data->waketouch_flag) {
+		/* Clear interrupts first */
+		retval = synaptics_rmi4_i2c_read(rmi4_data,
+				rmi4_data->f01_data_base_addr + 1,
+				intr_status,
+				rmi4_data->num_of_intr_regs);
+		if (retval < 0) {
+			dev_err(dev, "%s: Failed to clear interrupts\n", __func__);
+			return retval;
+		}
+
+		synaptics_rmi4_release_all(rmi4_data);
+		synaptics_rmi4_sensor_wake(rmi4_data);
+		synaptics_rmi4_irq_enable(rmi4_data, true); //JIC
+		synaptics_rmi4_waketouch_status(rmi4_data, STATUS_AWAKE);
+
+		return 0;
+	}
 
 	if (rmi4_data->staying_awake)
 		return 0;

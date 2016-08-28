@@ -70,6 +70,12 @@
 
 #define NAME_BUFFER_SIZE 256
 
+enum waketouch_status {
+	STATUS_ASLEEP = 0,
+	STATUS_AWAKE = 1,
+	STATUS_AWAKING = 2,
+};
+
 /*
  * struct synaptics_rmi4_fn_desc - function descriptor fields in PDT
  * @query_base_addr: base address for query registers
@@ -227,6 +233,13 @@ struct synaptics_rmi4_data {
 	unsigned short f01_cmd_base_addr;
 	unsigned short f01_ctrl_base_addr;
 	unsigned short f01_data_base_addr;
+
+	bool waketouch_flag;
+	enum waketouch_status waketouch_status;
+	unsigned long last_touch_ms;
+	int last_touch_x;
+	int last_touch_y;
+
 	int irq;
 	int sensor_max_x;
 	int sensor_max_y;
