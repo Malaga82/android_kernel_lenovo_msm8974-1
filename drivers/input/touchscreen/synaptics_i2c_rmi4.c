@@ -75,22 +75,6 @@
 #define NO_SLEEP_OFF 0
 #define NO_SLEEP_ON 1
 
-#ifdef SYNA_TAPTOWAKE
-enum doze {
-	DOZE_DISABLED = 0,
-	DOZE_ENABLED = 1,
-	DOZE_WAKEUP = 2,
-};
-static enum doze doze_status = DOZE_DISABLED;
-
-static void synaptics_rmi4_sensor_doze_resume(struct synaptics_rmi4_data *rmi4_data);
-static void synaptics_rmi4_sensor_doze_suspend(struct synaptics_rmi4_data *rmi4_data);
-
-static int syna_wakeup_flag = 1;
-
-static int BUTTON_DATA_OFFSET = 27;
-#endif
-
 enum device_status {
 	STATUS_NO_ERROR = 0x00,
 	STATUS_RESET_OCCURED = 0x01,
@@ -189,13 +173,6 @@ static ssize_t synaptics_rmi4_flipy_show(struct device *dev,
 
 static ssize_t synaptics_rmi4_flipy_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count);
-#ifdef SYNA_TAPTOWAKE
-static ssize_t synaptics_rmi4_gesture_wakeup_show(struct device *dev,
-		struct device_attribute *attr, char *buf);
-
-static ssize_t synaptics_rmi4_gesture_wakeup_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count);
-#endif
 
 
 struct synaptics_rmi4_f01_device_status {
@@ -448,11 +425,6 @@ static struct device_attribute attrs[] = {
 	__ATTR(flipy, (S_IRUGO | S_IWUSR | S_IWGRP),
 			synaptics_rmi4_flipy_show,
 			synaptics_rmi4_flipy_store),
-#ifdef SYNA_TAPTOWAKE
-	__ATTR(gesture_on, S_IRUGO,
-			synaptics_rmi4_gesture_wakeup_show,
-			synaptics_rmi4_gesture_wakeup_store),
-#endif
 };
 
 static bool exp_fn_inited;
@@ -729,43 +701,6 @@ static ssize_t synaptics_rmi4_flipy_store(struct device *dev,
 
 	return count;
 }
-
-#ifdef SYNA_TAPTOWAKE
-static ssize_t synaptics_rmi4_gesture_wakeup_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	return snprintf(buf, PAGE_SIZE, "%d\n", syna_wakeup_flag);
-}
-
-static ssize_t synaptics_rmi4_gesture_wakeup_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	unsigned long val;
-	int error;
-	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
-
-	error = sstrtoul(buf, 10, &val);
-	if (error)
-		return error;
-
-	if (val == 1) {
-		if (!syna_wakeup_flag) {
-			syna_wakeup_flag = 1;
-			enable_irq_wake(rmi4_data->irq);
-			dev_err(dev, "%s: Tap2Wake enabled, syna_wakeup_flag=%ld\n", __func__, val);
-		} else
-			return count;
-	} else {
-		if (syna_wakeup_flag) {
-			syna_wakeup_flag = 0;
-			disable_irq_wake(rmi4_data->irq);
-			dev_err(dev, "%s: Tap2Wake disabled, syna_wakeup_flag=%ld\n", __func__, val);
-		} else
-			return count;
-	}
-	return count;
-}
-#endif
 
  /**
  * synaptics_rmi4_set_page()
@@ -1226,63 +1161,6 @@ static void synaptics_rmi4_f1a_report(struct synaptics_rmi4_data *rmi4_data,
 #ifdef NO_0D_WHILE_2D
 	static bool before_2d_status[MAX_NUMBER_OF_BUTTONS];
 	static bool while_2d_status[MAX_NUMBER_OF_BUTTONS];
-#endif
-
-#ifdef SYNA_TAPTOWAKE
-	unsigned char button_type;
-
-	if (syna_wakeup_flag && ((doze_status == DOZE_ENABLED || doze_status == DOZE_WAKEUP))) {
-		retval = synaptics_rmi4_i2c_read(rmi4_data,
-				rmi4_data->f51_data_base_addr + BUTTON_DATA_OFFSET,
-				&button_type,
-				sizeof(button_type));
-		if (retval < 0) {
-			dev_err(&rmi4_data->i2c_client->dev, "Failed to read button type!\n");
-			synaptics_rmi4_sensor_doze_suspend(rmi4_data);
-			return;
-		}
-
-		switch (button_type) {
-			case 1: // MENU
-				dev_err(&rmi4_data->i2c_client->dev,
-					"Double tap menu detected, button_type=%d\n", button_type);
-				doze_status = DOZE_WAKEUP;
-
-				input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 1);
-				input_sync(rmi4_data->input_dev);
-				input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 0);
-				input_sync(rmi4_data->input_dev);
-
-				break;
-			case 2: // HOME
-				dev_err(&rmi4_data->i2c_client->dev,
-					"Double tap home detected, button_type=%d\n", button_type);
-				doze_status = DOZE_WAKEUP;
-
-				input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 1);
-				input_sync(rmi4_data->input_dev);
-				input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 0);
-				input_sync(rmi4_data->input_dev);
-
-				break;
-			case 4: // BACK
-				dev_err(&rmi4_data->i2c_client->dev,
-					"Double tap back detected, button_type=%d\n", button_type);
-				doze_status = DOZE_WAKEUP;
-
-				input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 1);
-				input_sync(rmi4_data->input_dev);
-				input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 0);
-				input_sync(rmi4_data->input_dev);
-
-				break;
-			default:
-				dev_err(&rmi4_data->i2c_client->dev,
-					"Unknown button type detected, button_type=%d\n", button_type);
-				return;
-		}
-		return;
-	}
 #endif
 
 	if (do_once) {
@@ -1808,9 +1686,6 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 	unsigned char size_of_2d_data;
 	unsigned char size_of_query8;
 	unsigned char ctrl_8_offset;
-#ifdef SYNA_TAPTOWAKE
-	unsigned char ctrl_20_offset;
-#endif
 	unsigned char ctrl_23_offset;
 	unsigned char ctrl_28_offset;
 	unsigned char num_of_fingers;
@@ -1842,22 +1717,6 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 			query_5.ctrl6_is_present +
 			query_5.ctrl7_is_present;
 
-#ifdef SYNA_TAPTOWAKE
-	ctrl_20_offset = ctrl_8_offset +
-			query_5.ctrl8_is_present +
-			query_5.ctrl9_is_present +
-			query_5.ctrl10_is_present +
-			query_5.ctrl11_is_present +
-			query_5.ctrl12_is_present +
-			query_5.ctrl13_is_present +
-			query_5.ctrl14_is_present +
-			query_5.ctrl15_is_present +
-			query_5.ctrl16_is_present +
-			query_5.ctrl17_is_present +
-			query_5.ctrl18_is_present +
-			query_5.ctrl19_is_present;
-#endif
-
 	ctrl_23_offset = ctrl_8_offset +
 			query_5.ctrl8_is_present +
 			query_5.ctrl9_is_present +
@@ -1881,10 +1740,6 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 			query_5.ctrl25_is_present +
 			query_5.ctrl26_is_present +
 			query_5.ctrl27_is_present;
-
-#ifdef SYNA_TAPTOWAKE
-	rmi4_data->f12_ctrl_20_offset = ctrl_20_offset;
-#endif
 
 	retval = synaptics_rmi4_i2c_read(rmi4_data,
 			fhandler->full_addr.ctrl_base + ctrl_23_offset,
@@ -2367,10 +2222,6 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 				if (rmi_fd.intr_src_count == 0)
 					break;
 
-#ifdef SYNA_TAPTOWAKE
-				rmi4_data->f12_ctrl_base_addr =
-						rmi_fd.ctrl_base_addr;
-#endif
 				retval = synaptics_rmi4_alloc_fh(&fhandler,
 						&rmi_fd, page_number);
 				if (retval < 0) {
@@ -2386,13 +2237,6 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 				if (retval < 0)
 					return retval;
 				break;
-
-#ifdef SYNA_TAPTOWAKE
-			case SYNAPTICS_RMI4_F51:
-				rmi4_data->f51_data_base_addr =
-						page_number << 8 | rmi_fd.data_base_addr;
-				break;
-#endif
 
 			case SYNAPTICS_RMI4_F1A:
 				if (rmi_fd.intr_src_count == 0)
@@ -2600,11 +2444,6 @@ static int synaptics_rmi4_reset_device(struct synaptics_rmi4_data *rmi4_data)
 				__func__);
 		return retval;
 	}
-
-#ifdef SYNA_TAPTOWAKE
-	if (syna_wakeup_flag && doze_status != DOZE_DISABLED)
-		synaptics_rmi4_sensor_doze_suspend(rmi4_data);
-#endif
 
 	return 0;
 }
@@ -3213,10 +3052,6 @@ static int __devinit synaptics_rmi4_probe(struct i2c_client *client,
 		}
 	}
 
-#ifdef SYNA_TAPTOWAKE
-	input_set_capability(rmi4_data->input_dev, EV_KEY, KEY_WAKEUP);
-#endif
-
 	retval = input_register_device(rmi4_data->input_dev);
 	if (retval) {
 		dev_err(&client->dev,
@@ -3456,30 +3291,6 @@ static int __devexit synaptics_rmi4_remove(struct i2c_client *client)
 	return 0;
 }
 
-#ifdef SYNA_TAPTOWAKE
-static void synaptics_rmi4_sensor_doze_suspend(struct synaptics_rmi4_data *rmi4_data)
-{
-	unsigned char on[3] = {0x01, 0x01, 0x02};
-	int retval = 0;
-
-	dev_err(&(rmi4_data->input_dev->dev), "%s: Entering doze mode\n", __func__);
-
-	retval = synaptics_rmi4_i2c_write(rmi4_data,
-			rmi4_data->f12_ctrl_base_addr + rmi4_data->f12_ctrl_20_offset,
-			on,
-			sizeof(on));
-	if (retval < 0) {
-		dev_err(&(rmi4_data->input_dev->dev),
-			"%s: Failed to enter doze mode\n", __func__);
-		return;
-	}
-
-	doze_status = DOZE_ENABLED;
-
-	return;
-}
-#endif
-
 #ifdef CONFIG_PM
  /**
  * synaptics_rmi4_sensor_sleep()
@@ -3524,33 +3335,6 @@ static void synaptics_rmi4_sensor_sleep(struct synaptics_rmi4_data *rmi4_data)
 
 	return;
 }
-
-#ifdef SYNA_TAPTOWAKE
-static void synaptics_rmi4_sensor_doze_resume(struct synaptics_rmi4_data *rmi4_data)
-{
-	unsigned char off[3] = {0x01, 0x01, 0x00};
-	int retval = 0;
-
-	dev_err(&(rmi4_data->input_dev->dev), "%s: Exiting doze mode\n", __func__);
-
-	retval = synaptics_rmi4_i2c_write(rmi4_data,
-			rmi4_data->f12_ctrl_base_addr + rmi4_data->f12_ctrl_20_offset,
-			off,
-			sizeof(off));
-	if (retval < 0) {
-		dev_err(&(rmi4_data->input_dev->dev),
-				"%s: Failed to exit doze mode\n",
-				__func__);
-		return;
-	}
-
-	doze_status = DOZE_DISABLED;
-
-	synaptics_rmi4_release_all(rmi4_data);
-
-	return;
-}
-#endif
 
  /**
  * synaptics_rmi4_sensor_wake()
@@ -3860,23 +3644,7 @@ static int synaptics_rmi4_suspend(struct device *dev)
 {
 	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 	int retval;
-	unsigned char intr_status[MAX_INTR_REGISTERS];
 
-#ifdef SYNA_TAPTOWAKE
-	if (syna_wakeup_flag) {
-		/* Clear interrupts first */
-		retval = synaptics_rmi4_i2c_read(rmi4_data,
-				rmi4_data->f01_data_base_addr + 1,
-				intr_status,
-				rmi4_data->num_of_intr_regs);
-		if (retval < 0) {
-			dev_err(dev, "%s: Failed to clear interrupts\n", __func__);
-			return retval;
-		}
-
-		synaptics_rmi4_sensor_doze_suspend(rmi4_data);
-	} else {
-#endif
 	if (rmi4_data->stay_awake) {
 		rmi4_data->staying_awake = true;
 		return 0;
@@ -3918,9 +3686,6 @@ static int synaptics_rmi4_suspend(struct device *dev)
 	}
 	rmi4_data->suspended = true;
 
-#ifdef SYNA_TAPTOWAKE
-	}
-#endif
 	return 0;
 }
 
@@ -3938,13 +3703,6 @@ static int synaptics_rmi4_resume(struct device *dev)
 {
 	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
 	int retval;
-
-#ifdef SYNA_TAPTOWAKE
-	if (syna_wakeup_flag) {
-		synaptics_rmi4_sensor_doze_resume(rmi4_data);
-		synaptics_rmi4_irq_enable(rmi4_data, true);
-	} else {
-#endif
 
 	if (rmi4_data->staying_awake)
 		return 0;
@@ -3978,10 +3736,6 @@ static int synaptics_rmi4_resume(struct device *dev)
 		return retval;
 	}
 	rmi4_data->suspended = false;
-
-#ifdef SYNA_TAPTOWAKE
-	}
-#endif
 
 	return 0;
 }
