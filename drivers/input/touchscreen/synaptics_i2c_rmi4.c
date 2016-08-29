@@ -114,6 +114,7 @@ static void synaptics_rmi4_waketouch_status(struct synaptics_rmi4_data *rmi4_dat
 #define WAKETOUCH_MAX_PX 200
 #define WAKETOUCH_MAX_MS 500
 #define WAKETOUCH_MIN_MS 50
+#define WAKETOUCH_DEADZONE_PX 150
 
 static int synaptics_rmi4_i2c_read(struct synaptics_rmi4_data *rmi4_data,
 		unsigned short addr, unsigned char *data,
@@ -1009,6 +1010,14 @@ static int synaptics_rmi4_waketouch_f12_gesture(struct synaptics_rmi4_data *rmi4
 				x = rmi4_data->sensor_max_x - x;
 			if (rmi4_data->flip_y)
 				y = rmi4_data->sensor_max_y - y;
+
+			// deadzone check
+			if (x < WAKETOUCH_DEADZONE_PX
+					|| x > rmi4_data->sensor_max_x - WAKETOUCH_DEADZONE_PX
+					|| y < WAKETOUCH_DEADZONE_PX
+					|| y > rmi4_data->sensor_max_y - WAKETOUCH_DEADZONE_PX) {
+				continue;
+			}
 
 			touch_diff_x = abs(rmi4_data->last_touch_x - x);
 			touch_diff_y = abs(rmi4_data->last_touch_y - y);
