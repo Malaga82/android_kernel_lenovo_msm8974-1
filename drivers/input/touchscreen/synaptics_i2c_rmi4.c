@@ -1041,7 +1041,7 @@ static int synaptics_rmi4_waketouch_f12_gesture(struct synaptics_rmi4_data *rmi4
 				continue;
 			}
 
-			// WAKE ->
+			// WAKE UP ->
 			dev_err(&rmi4_data->i2c_client->dev,
 				"F12: WakeTouch: Registered double tap finger=%d at x=%d,y=%d time_diff=%lu\n",
 				finger, x, y, time_diff);
@@ -1050,8 +1050,6 @@ static int synaptics_rmi4_waketouch_f12_gesture(struct synaptics_rmi4_data *rmi4
 			input_sync(rmi4_data->input_dev);
 			input_report_key(rmi4_data->input_dev, KEY_WAKEUP, 0);
 			input_sync(rmi4_data->input_dev);
-
-			synaptics_rmi4_waketouch_status(rmi4_data, STATUS_AWAKING);
 
 			return touch_count;
 		}
@@ -3525,12 +3523,6 @@ static void synaptics_rmi4_waketouch_status(struct synaptics_rmi4_data *rmi4_dat
 			rmi4_data->waketouch_status = STATUS_AWAKE;
 			dev_err(&(rmi4_data->input_dev->dev),
 				"%s: WakeTouch: Entering AWAKE waketouch_status=%d\n",
-				__func__, rmi4_data->waketouch_status);
-			break;
-		case STATUS_AWAKING:
-			rmi4_data->waketouch_status = STATUS_AWAKING;
-			dev_err(&(rmi4_data->input_dev->dev),
-				"%s: WakeTouch: Entering AWAKING waketouch_status=%d\n",
 				__func__, rmi4_data->waketouch_status);
 			break;
 		default:
