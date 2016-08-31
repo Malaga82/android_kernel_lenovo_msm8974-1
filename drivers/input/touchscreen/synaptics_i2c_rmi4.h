@@ -73,7 +73,6 @@
 enum waketouch_status {
 	STATUS_ASLEEP = 0,
 	STATUS_AWAKE = 1,
-	STATUS_AWAKING = 2,
 };
 
 /*
