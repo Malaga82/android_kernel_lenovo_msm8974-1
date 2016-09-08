@@ -189,6 +189,12 @@ static ssize_t synaptics_rmi4_waketouch_show(struct device *dev,
 static ssize_t synaptics_rmi4_waketouch_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count);
 
+static ssize_t synaptics_rmi4_glove_show(struct device *dev,
+		struct device_attribute *attr, char *buf);
+
+static ssize_t synaptics_rmi4_glove_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count);
+
 
 struct synaptics_rmi4_f01_device_status {
 	union {
@@ -313,6 +319,35 @@ struct synaptics_rmi4_f12_ctrl_8 {
 			unsigned char num_of_tx;
 		};
 		unsigned char data[14];
+	};
+};
+
+struct synaptics_rmi4_f12_ctrl_9 {
+	union {
+		struct {
+			unsigned char ctrl0_0;
+			unsigned char ctrl0_1;
+			unsigned char ctrl0_2;
+			unsigned char ctrl0_3;
+			unsigned char ctrl0_4;
+			unsigned char ctrl0_5;
+			unsigned char ctrl0_6;
+			unsigned char ctrl1_0;
+			unsigned char ctrl1_1;
+			unsigned char ctrl1_2;
+			unsigned char ctrl1_3;
+			unsigned char ctrl2_0;
+			unsigned char ctrl2_1;
+			unsigned char ctrl2_2;
+			unsigned char ctrl2_3;
+			unsigned char ctrl3_0;
+			unsigned char ctrl4_0;
+			unsigned char ctrl4_1;
+			unsigned char ctrl4_2;
+			unsigned char ctrl4_3;
+			unsigned char ctrl4_4;
+		};
+		unsigned char data[21];
 	};
 };
 
@@ -443,6 +478,9 @@ static struct device_attribute attrs[] = {
 	__ATTR(gesture_on, S_IRUGO,
 			synaptics_rmi4_waketouch_show,
 			synaptics_rmi4_waketouch_store),
+	__ATTR(glove_on, S_IRUGO,
+			synaptics_rmi4_glove_show,
+			synaptics_rmi4_glove_store),
 };
 
 static bool exp_fn_inited;
@@ -744,6 +782,116 @@ static ssize_t synaptics_rmi4_waketouch_store(struct device *dev,
 		}
 	}
 
+	return count;
+}
+
+static ssize_t synaptics_rmi4_glove_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", rmi4_data->glove_flag);
+}
+
+static ssize_t synaptics_rmi4_glove_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int retval, flag;
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+	struct synaptics_rmi4_f12_ctrl_9 ctrl_9;
+	struct synaptics_rmi4_f12_query_5 query_5;
+	unsigned char ctrl_9_offset;
+	unsigned char sen_on[2] = {0x10,0x05};
+	unsigned char sen_off[2] = {0x1e,0x05};
+
+	retval = synaptics_rmi4_i2c_read(rmi4_data,
+			rmi4_data->f12_query_base_addr + 5,
+			query_5.data,
+			sizeof(query_5.data));
+	if (retval < 0)
+		return retval;
+
+	ctrl_9_offset = query_5.ctrl0_is_present +
+			query_5.ctrl1_is_present +
+			query_5.ctrl2_is_present +
+			query_5.ctrl3_is_present +
+			query_5.ctrl4_is_present +
+			query_5.ctrl5_is_present +
+			query_5.ctrl6_is_present +
+			query_5.ctrl7_is_present +
+			query_5.ctrl8_is_present;
+
+	if (sscanf(buf, "%d", &flag) != 1)
+		return -EINVAL;
+
+	if (flag > 0)
+		rmi4_data->glove_flag = true;
+	else
+		rmi4_data->glove_flag = false;
+
+	pr_info("%s: glove on is %d\n", __func__, rmi4_data->glove_flag);
+	pr_debug("%s: ctrl base addr is %x, ctrl 9 offset is %d\n",
+			__func__, rmi4_data->f12_ctrl_base_addr, ctrl_9_offset);
+
+	if (rmi4_data->glove_flag) {
+		retval = synaptics_rmi4_i2c_write(rmi4_data,
+				rmi4_data->f12_ctrl_base_addr + ctrl_9_offset,
+				sen_on,
+				sizeof(sen_on));
+		if (retval < 0) {
+			pr_err("%s: write to ctrl9 error!\n", __func__);
+			return retval;
+		}
+
+		retval = synaptics_rmi4_i2c_read(rmi4_data,
+				rmi4_data->f12_ctrl_base_addr + ctrl_9_offset,
+				ctrl_9.data,
+				sizeof(ctrl_9.data));
+		if (retval < 0)
+			return retval;
+
+		pr_debug("%s: write to 0x10,0x05,ctrl9 0-0 is 0x%x,0-1 is 0x%x\n",
+				__func__, ctrl_9.ctrl0_0, ctrl_9.ctrl0_1);
+
+		retval = synaptics_rmi4_i2c_read(rmi4_data,
+				0x0015,
+				ctrl_9.data,
+				sizeof(ctrl_9.data));
+		if (retval < 0)
+			return retval;
+
+		pr_debug("%s: write to 0x10,0x05, ctrl9 0-0 is 0x%x, 0-1 is 0x%x\n",
+				__func__, ctrl_9.ctrl0_0, ctrl_9.ctrl0_1);
+	} else {
+		retval = synaptics_rmi4_i2c_write(rmi4_data,
+				rmi4_data->f12_ctrl_base_addr + ctrl_9_offset,
+				sen_off,
+				sizeof(sen_off));
+		if (retval < 0) {
+			pr_err("%s: write to ctrl9 error!\n", __func__);
+			return retval;
+		}
+
+		retval = synaptics_rmi4_i2c_read(rmi4_data,
+				rmi4_data->f12_ctrl_base_addr + ctrl_9_offset,
+				ctrl_9.data,
+				sizeof(ctrl_9.data));
+		if (retval < 0)
+			return retval;
+
+		pr_debug("%s: write to 0x1e, 0x05, ctrl9 0-0 is 0x%x, 0-1 is 0x%x\n",
+				__func__, ctrl_9.ctrl0_0, ctrl_9.ctrl0_1);
+
+		retval = synaptics_rmi4_i2c_read(rmi4_data,
+				0x0015,
+				ctrl_9.data,
+				sizeof(ctrl_9.data));
+		if (retval < 0)
+			return retval;
+
+		pr_debug("%s: write to 0x10, 0x05, ctrl9 0-0 is 0x%x, 0-1 is 0x%x\n",
+				__func__, ctrl_9.ctrl0_0, ctrl_9.ctrl0_1);
+	}
 	return count;
 }
 
@@ -2409,6 +2557,12 @@ static int synaptics_rmi4_query_device(struct synaptics_rmi4_data *rmi4_data)
 			case SYNAPTICS_RMI4_F12:
 				if (rmi_fd.intr_src_count == 0)
 					break;
+
+				rmi4_data->f12_query_base_addr =
+						rmi_fd.query_base_addr;
+
+				rmi4_data->f12_ctrl_base_addr =
+						rmi_fd.ctrl_base_addr;
 
 				retval = synaptics_rmi4_alloc_fh(&fhandler,
 						&rmi_fd, page_number);

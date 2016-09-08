@@ -232,12 +232,16 @@ struct synaptics_rmi4_data {
 	unsigned short f01_cmd_base_addr;
 	unsigned short f01_ctrl_base_addr;
 	unsigned short f01_data_base_addr;
+	unsigned short f12_query_base_addr;
+	unsigned short f12_ctrl_base_addr;
 
 	bool waketouch_flag;
 	enum waketouch_status waketouch_status;
 	unsigned long last_touch_ms;
 	int last_touch_x;
 	int last_touch_y;
+
+	bool glove_flag;
 
 	int irq;
 	int sensor_max_x;
