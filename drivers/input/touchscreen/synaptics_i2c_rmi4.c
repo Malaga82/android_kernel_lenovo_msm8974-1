@@ -3288,6 +3288,9 @@ static int __devinit synaptics_rmi4_probe(struct i2c_client *client,
 	rmi4_data->waketouch_flag = true;
 	rmi4_data->waketouch_status = STATUS_AWAKE;
 
+	// Glove
+	rmi4_data->glove_flag = false;
+
 	rmi4_data->i2c_read = synaptics_rmi4_i2c_read;
 	rmi4_data->i2c_write = synaptics_rmi4_i2c_write;
 	rmi4_data->irq_enable = synaptics_rmi4_irq_enable;
