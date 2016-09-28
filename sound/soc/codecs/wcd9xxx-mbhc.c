@@ -71,7 +71,11 @@
 #define SWCH_IRQ_DEBOUNCE_TIME_US 5000
 #define BTN_RELEASE_DEBOUNCE_TIME_MS 25
 
+#ifdef CONFIG_MACH_LENOVO_K920
 #define GND_MIC_SWAP_THRESHOLD 4
+#else
+#define GND_MIC_SWAP_THRESHOLD 2
+#endif
 #define OCP_ATTEMPT 1
 
 #define FW_READ_ATTEMPTS 15
@@ -86,7 +90,11 @@
 #define DEFAULT_DCE_WAIT 60000
 #define DEFAULT_STA_WAIT 5000
 
+#ifdef CONFIG_MACH_LENOVO_K920
+#define VDDIO_MICBIAS_MV 2700
+#else
 #define VDDIO_MICBIAS_MV 1800
+#endif
 
 #define WCD9XXX_MICBIAS_PULLDOWN_SETTLE_US 5000
 
@@ -120,10 +128,19 @@
 /* RX_HPH_CNP_WG_TIME increases by 0.24ms */
 #define WCD9XXX_WG_TIME_FACTOR_US	240
 
+#ifdef CONFIG_MACH_LENOVO_K920
+#define WCD9XXX_V_CS_HS_MAX 2500
+#define WCD9XXX_V_CS_NO_MIC 10
+#else
 #define WCD9XXX_V_CS_HS_MAX 500
 #define WCD9XXX_V_CS_NO_MIC 5
+#endif
 #define WCD9XXX_MB_MEAS_DELTA_MAX_MV 80
+#ifdef CONFIG_MACH_LENOVO_K920
 #define WCD9XXX_CS_MEAS_DELTA_MAX_MV 14
+#else
+#define WCD9XXX_CS_MEAS_DELTA_MAX_MV 12
+#endif
 
 static int impedance_detect_en;
 module_param(impedance_detect_en, int,
@@ -812,7 +829,7 @@ static void wcd9xxx_insert_detect_setup(struct wcd9xxx_mbhc *mbhc, bool ins)
 		 ins ? "insert" : "removal");
 	/* Disable detection to avoid glitch */
 	snd_soc_update_bits(mbhc->codec, WCD9XXX_A_MBHC_INSERT_DETECT, 1, 0);
-
+#ifdef CONFIG_MACH_LENOVO_K920
 	/* Use outer pull-up. */
 	if (mbhc->mbhc_cfg->gpio_level_insert)
 		snd_soc_write(mbhc->codec, WCD9XXX_A_MBHC_INSERT_DETECT,
@@ -820,7 +837,14 @@ static void wcd9xxx_insert_detect_setup(struct wcd9xxx_mbhc *mbhc, bool ins)
 	else
 		snd_soc_write(mbhc->codec, WCD9XXX_A_MBHC_INSERT_DETECT,
 			      (0x1C | (ins ? (1 << 1) : 0)));
-				  
+#else
+	if (mbhc->mbhc_cfg->gpio_level_insert)
+		snd_soc_write(mbhc->codec, WCD9XXX_A_MBHC_INSERT_DETECT,
+			      (0x68 | (ins ? (1 << 1) : 0)));
+	else
+		snd_soc_write(mbhc->codec, WCD9XXX_A_MBHC_INSERT_DETECT,
+			      (0x6C | (ins ? (1 << 1) : 0)));
+#endif
 	/* Re-enable detection */
 	snd_soc_update_bits(mbhc->codec, WCD9XXX_A_MBHC_INSERT_DETECT, 1, 1);
 }
@@ -895,18 +919,6 @@ static void wcd9xxx_report_plug(struct wcd9xxx_mbhc *mbhc, int insertion,
 						SND_JACK_ANC_HEADPHONE |
 						SND_JACK_UNSUPPORTED);
 		}
-
-#if 0
-        if (((mbhc->old_jack_type & SND_JACK_HEADPHONE) &&
-                !(mbhc->old_jack_type & SND_JACK_MICROPHONE)) &&
-                jack_type == SND_JACK_HEADSET) {
-		    mbhc->hph_status |= ~SND_JACK_HEADPHONE;
-		    wcd9xxx_jack_report(mbhc, &mbhc->headset_jack,
-                    mbhc->hph_status, WCD9XXX_JACK_MASK);
-            printk(KERN_DEBUG "%s: enter, Reporting HEADPHONE removal\n",
-                    __func__);
-        }
-#endif
 
 		/* Report insertion */
 		mbhc->hph_status |= jack_type;
@@ -1458,7 +1470,7 @@ wcd9xxx_cs_find_plug_type(struct wcd9xxx_mbhc *mbhc,
 			if (!minv || minv > d->_vdces)
 				minv = d->_vdces;
 		}
-#if 0   // avoid wrong detecting for lakala
+#ifndef CONFIG_MACH_LENOVO_K920
 		if ((!d->mic_bias &&
 		    (d->_vdces >= WCD9XXX_CS_MEAS_INVALD_RANGE_LOW_MV &&
 		     d->_vdces <= WCD9XXX_CS_MEAS_INVALD_RANGE_HIGH_MV)) ||
@@ -1546,6 +1558,17 @@ wcd9xxx_cs_find_plug_type(struct wcd9xxx_mbhc *mbhc,
 		type = PLUG_TYPE_INVALID;
 		goto exit;
 	}
+
+#ifndef CONFIG_MACH_LENOVO_K920
+	if (!(event_state & (1UL << MBHC_EVENT_PA_HPHL))) {
+		if (((type == PLUG_TYPE_HEADSET ||
+		      type == PLUG_TYPE_HEADPHONE) && ch != sz)) {
+			pr_debug("%s: Invalid, not fully inserted, TYPE %d\n",
+				 __func__, type);
+			type = PLUG_TYPE_INVALID;
+		}
+	}
+#endif
 
 	if (type == PLUG_TYPE_HEADSET &&
 	    (mbhc->mbhc_cfg->micbias_enable_flags &
@@ -3098,8 +3121,7 @@ static void wcd9xxx_correct_swch_plug(struct work_struct *work)
 			}
 		} else if (plug_type == PLUG_TYPE_HEADPHONE) {
 			pr_debug("Good headphone detected, continue polling\n");
-
-			/* For workground */
+#ifdef CONFIG_MACH_LENOVO_K920 /* For workground */
 			pt_gnd_mic_swap_cnt++;
 			if (mbhc->mbhc_cfg->swap_gnd_mic) {
 				/*
@@ -3114,7 +3136,7 @@ static void wcd9xxx_correct_swch_plug(struct work_struct *work)
 				printk(KERN_DEBUG "%s: pt_gnd_mic_swap_cnt=%d\n",
 					__func__, pt_gnd_mic_swap_cnt);
 			}
-
+#endif
 			WCD9XXX_BCL_LOCK(mbhc->resmgr);
 			if (mbhc->mbhc_cfg->detect_extn_cable) {
 				if (mbhc->current_plug != plug_type)
@@ -3270,6 +3292,9 @@ static void wcd9xxx_swch_irq_handler(struct wcd9xxx_mbhc *mbhc)
 			wcd9xxx_report_plug(mbhc, 0, SND_JACK_HEADPHONE);
 			is_removed = true;
 		} else if (mbhc->current_plug == PLUG_TYPE_GND_MIC_SWAP) {
+#ifndef CONFIG_MACH_LENOVO_K920
+			wcd9xxx_report_plug(mbhc, 0, SND_JACK_UNSUPPORTED);
+#endif
 			is_removed = true;
 		} else if (mbhc->current_plug == PLUG_TYPE_HEADSET) {
 			wcd9xxx_pause_hs_polling(mbhc);
@@ -3417,7 +3442,7 @@ static int wcd9xxx_determine_button(const struct wcd9xxx_mbhc *mbhc,
 static int wcd9xxx_get_button_mask(const int btn)
 {
 	int mask = 0;
-
+#ifdef CONFIG_MACH_LENOVO_K920
 	switch (btn) {
 	case 0:
 	case 1:
@@ -3440,6 +3465,34 @@ static int wcd9xxx_get_button_mask(const int btn)
 		mask = SND_JACK_BTN_7;
 		break;
 	}
+#else
+	switch (btn) {
+	case 0:
+		mask = SND_JACK_BTN_0;
+		break;
+	case 1:
+		mask = SND_JACK_BTN_1;
+		break;
+	case 2:
+		mask = SND_JACK_BTN_2;
+		break;
+	case 3:
+		mask = SND_JACK_BTN_3;
+		break;
+	case 4:
+		mask = SND_JACK_BTN_4;
+		break;
+	case 5:
+		mask = SND_JACK_BTN_5;
+		break;
+	case 6:
+		mask = SND_JACK_BTN_6;
+		break;
+	case 7:
+		mask = SND_JACK_BTN_7;
+		break;
+	}
+#endif
 	return mask;
 }
 
@@ -5019,6 +5072,7 @@ int wcd9xxx_mbhc_init(struct wcd9xxx_mbhc *mbhc, struct wcd9xxx_resmgr *resmgr,
 			return ret;
 		}
 
+#ifdef CONFIG_MACH_LENOVO_K920
 		ret = snd_jack_set_key(mbhc->button_jack.jack,
 					   SND_JACK_BTN_5,
 					   KEY_VOLUMEUP);
@@ -5035,7 +5089,7 @@ int wcd9xxx_mbhc_init(struct wcd9xxx_mbhc *mbhc, struct wcd9xxx_resmgr *resmgr,
 				__func__);
 			return ret;
 		}
-
+#endif
 		INIT_DELAYED_WORK(&mbhc->mbhc_firmware_dwork,
 				  wcd9xxx_mbhc_fw_read);
 		INIT_DELAYED_WORK(&mbhc->mbhc_btn_dwork, wcd9xxx_btn_lpress_fn);
