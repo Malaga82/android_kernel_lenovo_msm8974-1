@@ -1,0 +1,31 @@
+/*
+ * Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+
+&soc {
+	i2c@f9924000 {
+		synaptics_s3408@38 {
+			compatible = "synaptics,rmi4";
+			reg = <0x38>;
+			interrupt-parent = <&msmgpio>;
+			interrupts = <82 0x2>;
+			vdd-supply = <&pm8941_l18>;
+			vdd1-supply = <&pm8941_l23>;
+			vcc_i2c-supply = <&pm8941_l12>;
+			synaptics,reset-gpio = <&msmgpio 94 0x00>;
+			synaptics,irq-gpio = <&msmgpio 82 0x00>;
+			synaptics,button-map = <139 172 158>;
+			synaptics,i2c-pull-up;
+			synaptics,power-down;
+		};
+	};
+};

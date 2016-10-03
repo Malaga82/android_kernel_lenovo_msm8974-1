@@ -10,13 +10,17 @@
  * GNU General Public License for more details.
  */
 
+/include/ "msm8974-k920-audio.dtsi"
 /include/ "msm8974-k920-camera.dtsi"
 /include/ "msm8974-k920-camera-sensor.dtsi"
+/include/ "msm8974-k920-keys.dtsi"
 /include/ "msm8974-k920-leds.dtsi"
 /include/ "msm8974-k920-mdss.dtsi"
-/include/ "msm8974-k920-mdss-panels.dtsi"
+/include/ "msm8974-k920-panels.dtsi"
 /include/ "msm8974-k920-pm8941.dtsi"
 /include/ "msm8974-k920-regulator.dtsi"
+/include/ "msm8974-k920-touchpanel.dtsi"
+/include/ "msm8974-k920-usb.dtsi"
 
 / {
 	aliases {
@@ -27,10 +31,10 @@
 &pm8941_lsid0 {
 	qcom,power-on@800 {
 		interrupts = <0x0 0x8 0x0>,
-							 <0x0 0x8 0x1>,
-							 <0x0 0x8 0x3>,
-							 <0x0 0x8 0x4>,
-							 <0x0 0x8 0x5>;
+			     <0x0 0x8 0x1>,
+			     <0x0 0x8 0x3>,
+			     <0x0 0x8 0x4>,
+			     <0x0 0x8 0x5>;
 		interrupt-names = "kpdpwr", "resin", "kpdpwr-bark",
 			"resin-bark", "kpdpwr-resin-bark";
 
@@ -87,22 +91,6 @@
 		qcom,master-id = <86>;
 		qcom,scl-gpio = <&msmgpio 7 0>;
 		qcom,sda-gpio = <&msmgpio 6 0>;
-
-		/* synaptics s3408 touchscreen */
-		synaptics_s3408@38 {
-			compatible = "synaptics,rmi4";
-			reg = <0x38>;
-			interrupt-parent = <&msmgpio>;
-			interrupts = <82 0x2>;
-			vdd-supply = <&pm8941_l18>;
-			vdd1-supply = <&pm8941_l23>;
-			vcc_i2c-supply = <&pm8941_l12>;
-			synaptics,reset-gpio = <&msmgpio 94 0x00>;
-			synaptics,irq-gpio = <&msmgpio 82 0x00>;
-			synaptics,button-map = <139 172 158>;
-			synaptics,i2c-pull-up;
-			synaptics,power-down;
-		};
 
 		/* isl29124_f RGB light sensor */
 		isl29124_f@44 {
@@ -184,43 +172,6 @@
 		qcom,i2c-src-freq = <19200000>;
 		qcom,scl-gpio = <&msmgpio 26 0>;
 		qcom,sda-gpio = <&msmgpio 25 0>;
-
-		/* tfa9890 audio */
-		tfa9890@34 {
-			compatible = "nxp,tfa9890";
-			reg = <0x34>;
-			interrupt-parent = <&msmgpio>;
-			interrupts = <27 0x2>;
-			irq-gpio = <&msmgpio 27 0x00>;
-			reset-gpio = <&msmgpio 23 0x00>;
-			vdd-supply = <&pm8941_s3>;
-			vcc_i2c-supply = <&pm8941_lvs1>;
-			tfa9890,i2c-pull-up;
-			tfa9890,power-down;
-		};
-	};
-
-	gpio_keys {
-		compatible = "gpio-keys";
-		input-name = "gpio-keys";
-
-		vol_down {
-			label = "volume_down";
-			gpios = <&pm8941_gpios 2 0x1>;
-			linux,input-type = <1>;
-			linux,code = <114>;
-			gpio-key,wakeup;
-			debounce-interval = <15>;
-		};
-
-		vol_up {
-			label = "volume_up";
-			gpios = <&pm8941_gpios 5 0x1>;
-			linux,input-type = <1>;
-			linux,code = <115>;
-			gpio-key,wakeup;
-			debounce-interval = <15>;
-		};
 	};
 
 	/* NFC_eSE_SPI */
@@ -246,53 +197,6 @@
 		qcom,bam-consumer-pipe-index = <12>;
 		qcom,bam-producer-pipe-index = <13>;
 		qcom,master-id = <86>;
-	};
-
-	sound {
-		qcom,model = "msm8974-taiko-mtp-snd-card";
-		qcom,us-euro-gpios = <&pm8941_gpios 20 0>;
-		qcom,cdc-micbias2-headset-only;
-		qcom,mbhc-audio-jack-type = "4-pole-jack";
-
-		reg = <0xfe02c000 0x4>,
-		      <0xfe02d000 0x4>,
-		      <0xfe02e000 0x4>,
-		      <0xfe02f000 0x4>;
-
-		qcom,audio-routing =
-			"RX_BIAS", "MCLK",
-			"LDO_H", "MCLK",
-			"AIF4 MAD", "MCLK",
-			"DMIC1", "MIC BIAS1 External",
-			"MIC BIAS1 External", "Handset Mic",
-			"AMIC2", "MIC BIAS2 External",
-			"MIC BIAS2 External", "Headset Mic",
-			"DMIC5", "MIC BIAS4 External",
-			"MIC BIAS4 External", "ANC Front Mic",
-			"DMIC3", "MIC BIAS3 External",
-			"MIC BIAS3 External", "DUAL Rear Mic",
-			"DMIC1", "MIC BIAS1 External",
-			"MIC BIAS1 External", "Digital Mic1",
-			"DMIC2", "MIC BIAS1 External",
-			"MIC BIAS1 External", "Digital Mic2",
-			"DMIC3", "MIC BIAS3 External",
-			"MIC BIAS3 External", "Digital Mic3",
-			"DMIC4", "MIC BIAS3 External",
-			"MIC BIAS3 External", "Digital Mic4",
-			"DMIC5", "MIC BIAS4 External",
-			"MIC BIAS4 External", "Digital Mic5",
-			"DMIC6", "MIC BIAS4 External",
-			"MIC BIAS4 External", "Digital Mic6";
-	};
-
-	qcom,msm-dai-mi2s {
-		compatible = "qcom,msm-dai-mi2s";
-		qcom,msm-dai-q6-mi2s-quat {
-			compatible = "qcom,msm-dai-q6-mi2s";
-			qcom,msm-dai-q6-mi2s-dev-id = <3>;
-			qcom,msm-mi2s-rx-lines = <2>;
-			qcom,msm-mi2s-tx-lines = <1>;
-		};
 	};
 
 	hw_ver {
@@ -394,34 +298,8 @@
 	qcom,pad-drv-on = <0x7 0x4 0x4>; /* 16mA, 10mA, 10mA */
 };
 
-&usb_otg {
-	qcom,hsusb-otg-otg-control = <2>;
-};
-
 &uart7 {
 	status = "ok";
-};
-
-&usb3 {
-	qcom,otg-capability;
-};
-
-&slim_msm {
-	taiko_codec {
-/*		qcom,cdc-micbias1-ext-cap;*/
-		qcom,cdc-micbias2-ext-cap;
-/*		qcom,cdc-micbias3-ext-cap;*/
-/*		qcom,cdc-micbias4-ext-cap;*/
-
-		cdc-vdd-spkdrv-supply = <&pm8941_boost>;
-		qcom,cdc-vdd-spkdrv-voltage = <5000000 5000000>;
-		qcom,cdc-vdd-spkdrv-current = <1250000>;
-
-		qcom,cdc-on-demand-supplies = "cdc-vdd-spkdrv";
-
-		qcom,cdc-micbias-cfilt1-mv = <2700>;
-		qcom,cdc-dmic-sample-rate = <2400000>;
-	};
 };
 
 &spi_epm {
