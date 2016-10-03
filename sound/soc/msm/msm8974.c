@@ -82,8 +82,10 @@ static void *adsp_state_notifier;
 
 #define ADSP_STATE_READY_TIMEOUT_MS 50
 
+#ifdef CONFIG_MACH_LENOVO_K920
 extern int msm_q6_enable_mi2s_clocks(bool enable);
 static bool system_bootup = 1;
+#endif
 
 static inline int param_is_mask(int p)
 {
@@ -113,6 +115,11 @@ static const struct soc_enum msm8974_auxpcm_enum[] = {
 		SOC_ENUM_SINGLE_EXT(2, auxpcm_rate_text),
 };
 
+#ifdef CONFIG_MACH_LENOVO_K920
+#define QUAT_MI2S_ENABLE
+
+#ifdef QUAT_MI2S_ENABLE
+
 atomic_t quat_mi2s_rsc_ref;
 atomic_t quat_mi2s_clk_ref;
 #define GPIO_QUAT_MI2S_MCLK   57
@@ -127,10 +134,6 @@ struct request_gpio {
 };
 
 static struct request_gpio quat_mi2s_gpio[] = {
-	{
-		.gpio_no = GPIO_QUAT_MI2S_MCLK,
-		.gpio_name = "QUAT_MI2S_MCLK",
-	},
 	{
 		.gpio_no = GPIO_QUAT_MI2S_SCK,
 		.gpio_name = "QUAT_MI2S_SCK",
@@ -149,6 +152,8 @@ static struct request_gpio quat_mi2s_gpio[] = {
 		.gpio_name = "QUAT_MI2S_DATA1",
 	},
 };
+#endif
+#endif
 
 void *def_taiko_mbhc_cal(void);
 static int msm_snd_enable_codec_ext_clk(struct snd_soc_codec *codec, int enable,
@@ -163,7 +168,11 @@ static struct wcd9xxx_mbhc_config mbhc_cfg = {
 	.mclk_rate = TAIKO_EXT_CLK_RATE,
 	.gpio = 0,
 	.gpio_irq = 0,
+#ifdef CONFIG_MACH_LENOVO_K920
 	.gpio_level_insert = 0,
+#else
+	.gpio_level_insert = 1,
+#endif
 	.detect_extn_cable = true,
 	.micbias_enable_flags = 1 << MBHC_MICBIAS_ENABLE_THRESHOLD_HEADSET,
 	.insert_detect = true,
@@ -739,10 +748,13 @@ static const struct snd_soc_dapm_widget msm8974_dapm_widgets[] = {
 
 	SND_SOC_DAPM_MIC("Handset Mic", NULL),
 	SND_SOC_DAPM_MIC("Headset Mic", NULL),
-
+#ifdef CONFIG_MACH_LENOVO_K920
 	SND_SOC_DAPM_MIC("ANC Front Mic", NULL),
 	SND_SOC_DAPM_MIC("DUAL Rear Mic", NULL),
-
+#else
+	SND_SOC_DAPM_MIC("ANCRight Headset Mic", NULL),
+	SND_SOC_DAPM_MIC("ANCLeft Headset Mic", NULL),
+#endif
 	SND_SOC_DAPM_MIC("Analog Mic4", NULL),
 	SND_SOC_DAPM_MIC("Analog Mic6", NULL),
 	SND_SOC_DAPM_MIC("Analog Mic7", NULL),
@@ -1480,8 +1492,10 @@ static bool msm8974_swap_gnd_mic(struct snd_soc_codec *codec)
 	struct snd_soc_card *card = codec->card;
 	struct msm8974_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
 	int value = gpio_get_value_cansleep(pdata->us_euro_gpio);
+
 	pr_debug("%s: swap select switch %d to %d\n", __func__, value, !value);
 	gpio_set_value_cansleep(pdata->us_euro_gpio, !value);
+
 	return true;
 }
 
@@ -1740,7 +1754,11 @@ void *def_taiko_mbhc_cal(void)
 #undef S
 #define S(X, Y) ((WCD9XXX_MBHC_CAL_PLUG_TYPE_PTR(taiko_cal)->X) = (Y))
 	S(v_no_mic, 30);
+#ifdef CONFIG_MACH_LENOVO_K920
 	S(v_hs_max, 2500);
+#else
+	S(v_hs_max, 2400);
+#endif
 #undef S
 #define S(X, Y) ((WCD9XXX_MBHC_CAL_BTN_DET_PTR(taiko_cal)->X) = (Y))
 	S(c[0], 62);
@@ -1860,6 +1878,8 @@ static struct snd_soc_ops msm8974_be_ops = {
 	.shutdown = msm8974_snd_shudown,
 };
 
+#ifdef CONFIG_MACH_LENOVO_K920
+#ifdef QUAT_MI2S_ENABLE
 static int msm8974_quat_mi2s_free_gpios(void)
 {
 	int	i;
@@ -1890,7 +1910,7 @@ static struct afe_clk_cfg lpass_quat_mi2s_disable = {
 
 static void msm8974_quat_mi2s_shutdown(struct snd_pcm_substream *substream)
 {
-	int ret = 0;
+	int ret =0;
 
 	if (atomic_dec_return(&quat_mi2s_rsc_ref) == 0) {
 		if (atomic_dec_return(&quat_mi2s_clk_ref) == 0) {
@@ -1919,7 +1939,7 @@ static int msm8974_configure_quat_mi2s_gpio(void)
 			pr_err("%s: Failed to request gpio %d\n",
 					__func__,
 					quat_mi2s_gpio[i].gpio_no);
-			while(i >= 0) {
+			while( i >= 0) {
 				gpio_free(quat_mi2s_gpio[i].gpio_no);
 				i--;
 			}
@@ -1934,7 +1954,7 @@ int msm8974_quat_mi2s_clk_enable(bool enable)
 {
 	int ret = 0;
 
-	if (enable) {
+	if(enable){
 		if (atomic_inc_return(&quat_mi2s_clk_ref) == 1) {
 			pr_info("%s: Enable mi2s clk\n", __func__);
 			msm8974_configure_quat_mi2s_gpio();
@@ -1945,7 +1965,7 @@ int msm8974_quat_mi2s_clk_enable(bool enable)
 			}
 			msm_q6_enable_mi2s_clocks(enable);
 		}
-	} else {
+	}else{
 		if (atomic_dec_return(&quat_mi2s_clk_ref) == 0) {
 			pr_info("%s: Disable mi2s clk\n", __func__);
 			msm_q6_enable_mi2s_clocks(enable);
@@ -2020,6 +2040,8 @@ static struct snd_soc_ops msm8974_quat_mi2s_be_ops = {
 	.shutdown = msm8974_quat_mi2s_shutdown
 
 };
+#endif
+#endif
 
 static int msm8974_slimbus_2_hw_params(struct snd_pcm_substream *substream,
 				struct snd_pcm_hw_params *params)
@@ -2483,45 +2505,6 @@ static struct snd_soc_dai_link msm8974_common_dai_links[] = {
 		.ignore_pmdown_time = 1,
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA6,
 	},
-	/* End of FE DAI LINK */
-	{
-		.name = LPASS_BE_SLIMBUS_4_TX,
-		.stream_name = "Slimbus4 Capture",
-		.cpu_dai_name = "msm-dai-q6-dev.16393",
-		.platform_name = "msm-pcm-hostless",
-		.codec_name = "taiko_codec",
-		.codec_dai_name	= "taiko_vifeedback",
-		.be_id = MSM_BACKEND_DAI_SLIMBUS_4_TX,
-		.be_hw_params_fixup = msm_slim_4_tx_be_hw_params_fixup,
-		.ops = &msm8974_be_ops,
-		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
-		.ignore_suspend = 1,
-	},
-	/* Ultrasound RX Back End DAI Link */
-	{
-		.name = "SLIMBUS_2 Hostless Playback",
-		.stream_name = "SLIMBUS_2 Hostless Playback",
-		.cpu_dai_name = "msm-dai-q6-dev.16388",
-		.platform_name = "msm-pcm-hostless",
-		.codec_name = "taiko_codec",
-		.codec_dai_name = "taiko_rx2",
-		.ignore_suspend = 1,
-		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
-		.ops = &msm8974_slimbus_2_be_ops,
-	},
-	/* Ultrasound TX Back End DAI Link */
-	{
-		.name = "SLIMBUS_2 Hostless Capture",
-		.stream_name = "SLIMBUS_2 Hostless Capture",
-		.cpu_dai_name = "msm-dai-q6-dev.16389",
-		.platform_name = "msm-pcm-hostless",
-		.codec_name = "taiko_codec",
-		.codec_dai_name = "taiko_tx2",
-		.ignore_suspend = 1,
-		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
-		.ops = &msm8974_slimbus_2_be_ops,
-	},
-	/* LSM FE */
 	{
 		.name = "Listen 2 Audio Service",
 		.stream_name = "Listen 2 Audio Service",
@@ -2635,6 +2618,43 @@ static struct snd_soc_dai_link msm8974_common_dai_links[] = {
 		.be_id = MSM_FRONTEND_DAI_LSM8,
 	},
 	{
+		.name = LPASS_BE_SLIMBUS_4_TX,
+		.stream_name = "Slimbus4 Capture",
+		.cpu_dai_name = "msm-dai-q6-dev.16393",
+		.platform_name = "msm-pcm-hostless",
+		.codec_name = "taiko_codec",
+		.codec_dai_name	= "taiko_vifeedback",
+		.be_id = MSM_BACKEND_DAI_SLIMBUS_4_TX,
+		.be_hw_params_fixup = msm_slim_4_tx_be_hw_params_fixup,
+		.ops = &msm8974_be_ops,
+		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
+		.ignore_suspend = 1,
+	},
+	/* Ultrasound RX Back End DAI Link */
+	{
+		.name = "SLIMBUS_2 Hostless Playback",
+		.stream_name = "SLIMBUS_2 Hostless Playback",
+		.cpu_dai_name = "msm-dai-q6-dev.16388",
+		.platform_name = "msm-pcm-hostless",
+		.codec_name = "taiko_codec",
+		.codec_dai_name = "taiko_rx2",
+		.ignore_suspend = 1,
+		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
+		.ops = &msm8974_slimbus_2_be_ops,
+	},
+	/* Ultrasound TX Back End DAI Link */
+	{
+		.name = "SLIMBUS_2 Hostless Capture",
+		.stream_name = "SLIMBUS_2 Hostless Capture",
+		.cpu_dai_name = "msm-dai-q6-dev.16389",
+		.platform_name = "msm-pcm-hostless",
+		.codec_name = "taiko_codec",
+		.codec_dai_name = "taiko_tx2",
+		.ignore_suspend = 1,
+		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
+		.ops = &msm8974_slimbus_2_be_ops,
+	},
+	{
 		.name = "MSM8974 Media9",
 		.stream_name = "MultiMedia9",
 		.cpu_dai_name   = "MultiMedia9",
@@ -2664,6 +2684,8 @@ static struct snd_soc_dai_link msm8974_common_dai_links[] = {
 		.codec_name = "snd-soc-dummy",
 		.be_id = MSM_FRONTEND_DAI_VOWLAN,
 	},
+#ifdef CONFIG_MACH_LENOVO_K920
+#ifdef QUAT_MI2S_ENABLE
 	{
 		.name = "MI2S_TX Hostless",
 		.stream_name = "MI2S_TX Hostless",
@@ -2679,6 +2701,8 @@ static struct snd_soc_dai_link msm8974_common_dai_links[] = {
 		.codec_dai_name = "snd-soc-dummy-dai",
 		.codec_name = "snd-soc-dummy",
 	},
+#endif
+#endif
 	/* Backend BT/FM DAI Links */
 	{
 		.name = LPASS_BE_INT_BT_SCO_RX,
@@ -2997,6 +3021,8 @@ static struct snd_soc_dai_link msm8974_common_dai_links[] = {
 		.be_hw_params_fixup = msm_be_hw_params_fixup,
 		.ignore_suspend = 1,
 	},
+#ifdef CONFIG_MACH_LENOVO_K920
+#ifdef QUAT_MI2S_ENABLE
 	{
 		.name = LPASS_BE_QUAT_MI2S_RX,
 		.stream_name = "Quaternary MI2S Playback",
@@ -3021,6 +3047,8 @@ static struct snd_soc_dai_link msm8974_common_dai_links[] = {
 		.be_hw_params_fixup = msm_be_hw_params_fixup,
 		.ops = &msm8974_quat_mi2s_be_ops,
 	},
+#endif
+#endif
 };
 
 static struct snd_soc_dai_link msm8974_hdmi_dai_link[] = {
